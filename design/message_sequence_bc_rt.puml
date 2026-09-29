@@ -1,0 +1,33 @@
+@startuml message_sequence_bc_rt
+title BC-to-RT and RT-to-BC Sequences (per LLR-1553-BC-003 / BC-004)
+
+participant "BC\n(bc_scheduler)" as BC
+participant "Bus\n(A or B)" as BUS
+participant "RT\n(rt_service)" as RT
+
+== BC-to-RT (receive command), LLR-BC-003 ==
+BC -> BUS : command word (T/R=receive, WC=N)
+BUS -> RT : command word
+BC -> BUS : data word 1
+BUS -> RT : data word 1
+BC -> BUS : data word ... N
+BUS -> RT : data word ... N
+RT -> RT : VALIDATE, EXECUTE (RT-001..RT-003)
+RT -> BUS : status word (after 4-12us delay, RT-005)
+BUS -> BC : status word
+note over BC : message complete
+
+== RT-to-BC (transmit command), LLR-BC-004 ==
+BC -> BUS : command word (T/R=transmit, WC=N)
+BUS -> RT : command word
+RT -> RT : VALIDATE (RT-002)
+RT -> BUS : status word (after 4-12us delay)
+BUS -> BC : status word
+RT -> BUS : data word 1
+BUS -> BC : data word 1
+RT -> BUS : data word ... N
+BUS -> BC : data word ... N
+BC -> BC : check status valid AND\nexactly N valid data words\n(LLR-BC-004)
+note over BC : message complete
+
+@enduml
