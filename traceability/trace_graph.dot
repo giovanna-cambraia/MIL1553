@@ -1,0 +1,194 @@
+// trace_graph.dot
+// Project: MIL1553
+// Generated from: traceability/hlr_to_llr.csv (HLR-to-LLR layer)
+//
+// STATUS: this graph currently renders the HLR -> LLR layer only.
+// The Code and Test node layers (and the llr_to_code.csv / code_to_test.csv
+// edges that would extend this graph) are added once src/ and tests/ exist
+// (see traceability/README note below). Regenerating this file after those
+// CSVs exist should union in Code and Test nodes/edges rather than replace
+// this file's HLR/LLR content.
+//
+// Color convention per SDD / PSAC palette:
+//   requirements = purple (HLR), a lighter purple (LLR)
+digraph trace_graph {
+  rankdir=LR;
+  fontname="Helvetica";
+  node [fontname="Helvetica", fontsize=9, style=filled];
+  edge [fontname="Helvetica", fontsize=8, color="#888888"];
+
+  subgraph cluster_hlr {
+    label="High-Level Requirements";
+    fontname="Helvetica";
+    style=dashed;
+    node [shape=box, fillcolor="#6A3D9A", fontcolor=white];
+
+    HLR_WORD_001 [label="HLR-1553-WORD-001"];
+    HLR_WORD_002 [label="HLR-1553-WORD-002"];
+    HLR_WORD_003 [label="HLR-1553-WORD-003"];
+    HLR_WORD_004 [label="HLR-1553-WORD-004"];
+    HLR_WORD_005 [label="HLR-1553-WORD-005"];
+    HLR_BC_001   [label="HLR-1553-BC-001"];
+    HLR_BC_002   [label="HLR-1553-BC-002"];
+    HLR_BC_003   [label="HLR-1553-BC-003"];
+    HLR_BC_004   [label="HLR-1553-BC-004"];
+    HLR_BC_005   [label="HLR-1553-BC-005"];
+    HLR_RT_001   [label="HLR-1553-RT-001"];
+    HLR_RT_002   [label="HLR-1553-RT-002"];
+    HLR_RT_003   [label="HLR-1553-RT-003"];
+    HLR_RT_004   [label="HLR-1553-RT-004"];
+    HLR_RT_005   [label="HLR-1553-RT-005"];
+    HLR_RT_006   [label="HLR-1553-RT-006"];
+    HLR_RT_007   [label="HLR-1553-RT-007"];
+    HLR_BM_001   [label="HLR-1553-BM-001"];
+    HLR_BUS_001  [label="HLR-1553-BUS-001"];
+    HLR_REDUN_001[label="HLR-1553-REDUN-001"];
+    HLR_BIT_001  [label="HLR-1553-BIT-001"];
+    HLR_BIT_002  [label="HLR-1553-BIT-002"];
+    HLR_BIT_003  [label="HLR-1553-BIT-003"];
+    HLR_BIT_004  [label="HLR-1553-BIT-004"];
+    HLR_ERR_001  [label="HLR-1553-ERR-001"];
+    HLR_ERR_002  [label="HLR-1553-ERR-002"];
+    HLR_ERR_003  [label="HLR-1553-ERR-003"];
+    HLR_ERR_004  [label="HLR-1553-ERR-004"];
+    HLR_ERR_005  [label="HLR-1553-ERR-005"];
+    HLR_ERR_006  [label="HLR-1553-ERR-006"];
+  }
+
+  subgraph cluster_llr {
+    label="Low-Level Requirements";
+    fontname="Helvetica";
+    style=dashed;
+    node [shape=box, fillcolor="#CAB2D6", fontcolor=black];
+
+    LLR_WORD_001 [label="LLR-1553-WORD-001"];
+    LLR_WORD_002 [label="LLR-1553-WORD-002"];
+    LLR_WORD_003 [label="LLR-1553-WORD-003"];
+    LLR_WORD_004 [label="LLR-1553-WORD-004"];
+    LLR_WORD_005 [label="LLR-1553-WORD-005"];
+    LLR_WORD_006 [label="LLR-1553-WORD-006"];
+    LLR_WORD_007 [label="LLR-1553-WORD-007"];
+    LLR_WORD_008 [label="LLR-1553-WORD-008"];
+    LLR_BC_001   [label="LLR-1553-BC-001"];
+    LLR_BC_002   [label="LLR-1553-BC-002"];
+    LLR_BC_003   [label="LLR-1553-BC-003"];
+    LLR_BC_004   [label="LLR-1553-BC-004"];
+    LLR_BC_005   [label="LLR-1553-BC-005"];
+    LLR_BC_006   [label="LLR-1553-BC-006"];
+    LLR_BC_007   [label="LLR-1553-BC-007"];
+    LLR_BC_008   [label="LLR-1553-BC-008"];
+    LLR_BC_009   [label="LLR-1553-BC-009"];
+    LLR_BC_010   [label="LLR-1553-BC-010"];
+    LLR_RT_001   [label="LLR-1553-RT-001"];
+    LLR_RT_002   [label="LLR-1553-RT-002"];
+    LLR_RT_003   [label="LLR-1553-RT-003"];
+    LLR_RT_004   [label="LLR-1553-RT-004"];
+    LLR_RT_005   [label="LLR-1553-RT-005"];
+    LLR_RT_006   [label="LLR-1553-RT-006"];
+    LLR_RT_007   [label="LLR-1553-RT-007"];
+    LLR_RT_008   [label="LLR-1553-RT-008"];
+    LLR_RT_009   [label="LLR-1553-RT-009"];
+    LLR_RT_010   [label="LLR-1553-RT-010"];
+    LLR_RT_011   [label="LLR-1553-RT-011"];
+    LLR_RT_012   [label="LLR-1553-RT-012"];
+    LLR_RT_013   [label="LLR-1553-RT-013"];
+    LLR_BM_001   [label="LLR-1553-BM-001"];
+    LLR_BM_002   [label="LLR-1553-BM-002"];
+    LLR_BM_003   [label="LLR-1553-BM-003"];
+    LLR_BUS_001  [label="LLR-1553-BUS-001"];
+    LLR_BUS_002  [label="LLR-1553-BUS-002"];
+    LLR_BUS_003  [label="LLR-1553-BUS-003"];
+    LLR_REDUN_001[label="LLR-1553-REDUN-001"];
+    LLR_REDUN_002[label="LLR-1553-REDUN-002"];
+    LLR_REDUN_003[label="LLR-1553-REDUN-003"];
+    LLR_BIT_001  [label="LLR-1553-BIT-001"];
+    LLR_BIT_002  [label="LLR-1553-BIT-002"];
+    LLR_BIT_003  [label="LLR-1553-BIT-003"];
+    LLR_BIT_004  [label="LLR-1553-BIT-004"];
+    LLR_BIT_005  [label="LLR-1553-BIT-005"];
+    LLR_BIT_006  [label="LLR-1553-BIT-006"];
+    LLR_BIT_007  [label="LLR-1553-BIT-007"];
+    LLR_BIT_008  [label="LLR-1553-BIT-008"];
+    LLR_BIT_009  [label="LLR-1553-BIT-009"];
+    LLR_ERR_001  [label="LLR-1553-ERR-001"];
+    LLR_ERR_002  [label="LLR-1553-ERR-002"];
+    LLR_ERR_003  [label="LLR-1553-ERR-003"];
+    LLR_ERR_004  [label="LLR-1553-ERR-004"];
+    LLR_ERR_005  [label="LLR-1553-ERR-005"];
+    LLR_ERR_006  [label="LLR-1553-ERR-006"];
+    LLR_ERR_007  [label="LLR-1553-ERR-007"];
+    LLR_ERR_008  [label="LLR-1553-ERR-008"];
+    LLR_ERR_009  [label="LLR-1553-ERR-009"];
+  }
+
+  // Edges generated from traceability/hlr_to_llr.csv
+  HLR_WORD_001 -> LLR_WORD_001;
+  HLR_WORD_001 -> LLR_WORD_002;
+  HLR_WORD_002 -> LLR_WORD_003;
+  HLR_WORD_003 -> LLR_WORD_004;
+  HLR_WORD_004 -> LLR_WORD_006;
+  HLR_WORD_004 -> LLR_WORD_007;
+  HLR_WORD_005 -> LLR_WORD_005;
+  HLR_WORD_005 -> LLR_WORD_008;
+
+  HLR_BC_001 -> LLR_BC_001;
+  HLR_BC_001 -> LLR_BC_002;
+  HLR_BC_001 -> LLR_BC_010;
+  HLR_BC_002 -> LLR_BC_003;
+  HLR_BC_002 -> LLR_BC_004;
+  HLR_BC_003 -> LLR_BC_005;
+  HLR_BC_004 -> LLR_BC_006;
+  HLR_BC_004 -> LLR_BC_007;
+  HLR_BC_005 -> LLR_BC_008;
+  HLR_BC_005 -> LLR_BC_009;
+
+  HLR_RT_001 -> LLR_RT_001;
+  HLR_RT_001 -> LLR_RT_002;
+  HLR_RT_001 -> LLR_RT_003;
+  HLR_RT_001 -> LLR_RT_004;
+  HLR_RT_001 -> LLR_RT_013;
+  HLR_RT_002 -> LLR_RT_005;
+  HLR_RT_003 -> LLR_RT_006;
+  HLR_RT_004 -> LLR_RT_007;
+  HLR_RT_005 -> LLR_RT_008;
+  HLR_RT_006 -> LLR_RT_009;
+  HLR_RT_007 -> LLR_RT_010;
+  HLR_RT_007 -> LLR_RT_011;
+  HLR_RT_007 -> LLR_RT_012;
+  HLR_RT_007 -> LLR_RT_013;
+
+  HLR_BM_001 -> LLR_BM_001;
+  HLR_BM_001 -> LLR_BM_002;
+  HLR_BM_001 -> LLR_BM_003;
+
+  HLR_BUS_001 -> LLR_BUS_001;
+  HLR_BUS_001 -> LLR_BUS_002;
+  HLR_BUS_001 -> LLR_BUS_003;
+
+  HLR_REDUN_001 -> LLR_REDUN_001;
+  HLR_REDUN_001 -> LLR_REDUN_002;
+  HLR_REDUN_001 -> LLR_REDUN_003;
+  HLR_REDUN_001 -> LLR_BC_010;
+
+  HLR_BIT_001 -> LLR_BIT_001;
+  HLR_BIT_001 -> LLR_BIT_002;
+  HLR_BIT_001 -> LLR_BIT_003;
+  HLR_BIT_001 -> LLR_BIT_004;
+  HLR_BIT_001 -> LLR_BIT_009;
+  HLR_BIT_002 -> LLR_BIT_005;
+  HLR_BIT_002 -> LLR_BIT_006;
+  HLR_BIT_003 -> LLR_BIT_007;
+  HLR_BIT_004 -> LLR_BIT_008;
+  HLR_BIT_004 -> LLR_BIT_009;
+  HLR_BIT_004 -> LLR_RT_013;
+
+  HLR_ERR_001 -> LLR_ERR_001;
+  HLR_ERR_002 -> LLR_ERR_002;
+  HLR_ERR_002 -> LLR_ERR_003;
+  HLR_ERR_003 -> LLR_ERR_004;
+  HLR_ERR_004 -> LLR_ERR_005;
+  HLR_ERR_005 -> LLR_ERR_006;
+  HLR_ERR_005 -> LLR_ERR_007;
+  HLR_ERR_006 -> LLR_ERR_008;
+  HLR_ERR_006 -> LLR_ERR_009;
+}
