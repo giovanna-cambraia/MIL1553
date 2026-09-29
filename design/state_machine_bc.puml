@@ -1,0 +1,46 @@
+@startuml state_machine_bc
+title BC State Machine (per LLR-1553-BC-010)
+
+[*] --> IDLE
+
+IDLE --> MAJOR_FRAME : start (valid schedule table)
+
+MAJOR_FRAME --> MINOR_FRAME : minor frame start
+
+MINOR_FRAME --> WAIT_RESPONSE : message issued,\nresponse expected
+MINOR_FRAME --> MAJOR_FRAME : last minor frame\nof major frame done
+
+WAIT_RESPONSE --> MINOR_FRAME : message complete
+WAIT_RESPONSE --> TIMEOUT : NO_RESPONSE or\ninvalid status
+
+TIMEOUT --> FAILOVER : alternate bus available\nand retry not yet used
+TIMEOUT --> MINOR_FRAME : retry already used\n[RT marked failed]
+
+FAILOVER --> WAIT_RESPONSE : retry on\nalternate bus
+
+WAIT_RESPONSE --> MINOR_FRAME : retry also failed\n[RT marked failed]
+
+MAJOR_FRAME --> DEGRADED : primary bus switch\n(REDUN-002 threshold)
+MINOR_FRAME --> DEGRADED : primary bus switch
+WAIT_RESPONSE --> DEGRADED : primary bus switch
+TIMEOUT --> DEGRADED : primary bus switch
+FAILOVER --> DEGRADED : primary bus switch
+
+DEGRADED --> MAJOR_FRAME : continue on\nremaining capability
+
+IDLE --> IDLE : stop (self)
+MAJOR_FRAME --> IDLE : stop
+MINOR_FRAME --> IDLE : stop
+WAIT_RESPONSE --> IDLE : stop
+TIMEOUT --> IDLE : stop
+FAILOVER --> IDLE : stop
+DEGRADED --> IDLE : stop
+
+note right of TIMEOUT
+  Any event not listed as a
+  transition from the current
+  state is ignored and counted
+  (LLR-1553-BC-010).
+end note
+
+@enduml
