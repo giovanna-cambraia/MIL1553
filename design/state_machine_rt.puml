@@ -1,0 +1,51 @@
+@startuml state_machine_rt
+title RT State Machine (per LLR-1553-RT-013)
+
+[*] --> RESET
+
+RESET --> IDLE : PBIT pass
+RESET --> FAIL_SAFE : PBIT fail
+
+IDLE --> WAIT_COMMAND : enable
+
+WAIT_COMMAND --> VALIDATE : command word\naddressed to self\nor broadcast (RT-001)
+
+VALIDATE --> EXECUTE : valid command
+VALIDATE --> ERROR : transmission error\nor illegal command
+VALIDATE --> BUSY : subsystem busy
+
+EXECUTE --> RESPOND
+
+RESPOND --> WAIT_COMMAND : last word sent
+
+ERROR --> WAIT_COMMAND : status word sent\n(or none needed)
+
+BUSY --> RESPOND
+
+RESET --> FAIL_SAFE : fatal BIT result
+IDLE --> FAIL_SAFE : fatal BIT result
+WAIT_COMMAND --> FAIL_SAFE : fatal BIT result
+VALIDATE --> FAIL_SAFE : fatal BIT result
+EXECUTE --> FAIL_SAFE : fatal BIT result
+RESPOND --> FAIL_SAFE : fatal BIT result
+ERROR --> FAIL_SAFE : fatal BIT result
+BUSY --> FAIL_SAFE : fatal BIT result
+
+IDLE --> RESET : reset mode command
+WAIT_COMMAND --> RESET : reset mode command
+VALIDATE --> RESET : reset mode command
+EXECUTE --> RESET : reset mode command
+RESPOND --> RESET : reset mode command
+ERROR --> RESET : reset mode command
+BUSY --> RESET : reset mode command
+FAIL_SAFE --> RESET : reset mode command
+
+note right of FAIL_SAFE
+  In FAIL_SAFE, RT executes no
+  command; a command addressed
+  to it is answered with a
+  status word, TF set, no data
+  words (stays visible to BC).
+end note
+
+@enduml
