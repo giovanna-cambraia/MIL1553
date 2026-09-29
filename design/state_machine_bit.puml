@@ -1,0 +1,41 @@
+@startuml state_machine_bit
+title BIT State Machine (per LLR-1553-BIT-009)
+
+[*] --> POWER_UP
+
+POWER_UP --> PBIT
+
+PBIT --> OPERATIONAL : pass
+PBIT --> FAIL : fail
+
+OPERATIONAL --> CBIT_RUNNING : each CBIT cycle
+CBIT_RUNNING --> OPERATIONAL : cycle complete,\nno fault
+
+OPERATIONAL --> IBIT_RUNNING : IBIT request
+IBIT_RUNNING --> OPERATIONAL : IBIT complete,\nno fault
+
+CBIT_RUNNING --> DEGRADED : non-fatal result
+IBIT_RUNNING --> DEGRADED : non-fatal result
+
+PBIT --> FAIL : fatal result
+OPERATIONAL --> FAIL : fatal result
+CBIT_RUNNING --> FAIL : fatal result
+IBIT_RUNNING --> FAIL : fatal result
+DEGRADED --> FAIL : fatal result
+
+DEGRADED --> OPERATIONAL : subsequent complete\nCBIT cycle passes
+
+note right of FAIL
+  Every state except POWER_UP
+  can transition to FAIL on a
+  fatal result (LLR-1553-BIT-009).
+end note
+
+note left of DEGRADED
+  DEGRADED only clears via a
+  full passing CBIT cycle, not
+  merely the absence of a new
+  fault.
+end note
+
+@enduml
