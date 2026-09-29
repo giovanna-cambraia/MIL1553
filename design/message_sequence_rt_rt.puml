@@ -1,0 +1,35 @@
+@startuml message_sequence_rt_rt
+title RT-to-RT Sequence (per LLR-1553-BC-005 / RT-007)
+
+participant "BC\n(bc_scheduler)" as BC
+participant "Bus\n(A or B)" as BUS
+participant "RT-recv\n(e.g. RT1)" as RT1
+participant "RT-xmit\n(e.g. RT2)" as RT2
+
+BC -> BUS : receive command (RT1, T/R=0)
+BUS -> RT1 : receive command
+BC -> BUS : transmit command (RT2, T/R=1)
+BUS -> RT2 : transmit command
+note over BC : both commands issued\nback to back (LLR-BC-005)
+
+RT2 -> RT2 : VALIDATE (RT-002)
+RT2 -> BUS : status word (RT2)
+BUS -> RT1 : status word (RT2)
+BUS -> BC : status word (RT2)
+
+RT2 -> BUS : data word 1..N
+BUS -> RT1 : data word 1..N
+BUS -> BC : data word 1..N
+
+RT1 -> RT1 : check N words valid,\nword count matches (RT-007)
+
+alt all N words valid and count matches
+  RT1 -> BUS : status word (RT1)
+  BUS -> BC : status word (RT1)
+  note over BC : message complete only if\nboth statuses valid and both\nRT addresses match commands\n(LLR-BC-005)
+else invalid or count mismatch
+  RT1 -> RT1 : set ME, send no status\n(LLR-RT-007)
+  note over BC : message incomplete -\nBC will see NO_RESPONSE\nfrom RT1's side
+end
+
+@enduml
