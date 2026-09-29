@@ -1,0 +1,38 @@
+digraph dataflow {
+  rankdir=LR;
+  fontname="Helvetica";
+  node [shape=box, style=filled, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+
+  BusIn [label="bus symbols in\n(40 half-bit symbols)", shape=parallelogram, fillcolor="#DDDDDD"];
+  Decode [label="manchester.decode_word\n(LLR-WORD-007)", fillcolor="#4472C4", fontcolor=white];
+  Classify [label="mil1553_word.classify_word\n(LLR-WORD-008)", fillcolor="#4472C4", fontcolor=white];
+  Unpack [label="mil1553_word.unpack_*\n(LLR-WORD-001/002/003)", fillcolor="#4472C4", fontcolor=white];
+  Validate [label="rt_service.validate\n(LLR-RT-002)", fillcolor="#2E7D32", fontcolor=white];
+  Execute [label="rt_service.execute\n(LLR-RT-003/004/009)", fillcolor="#2E7D32", fontcolor=white];
+  Subsystem [label="subsystem buffer\n(subaddress data)", shape=cylinder, fillcolor="#DDDDDD"];
+  BuildStatus [label="rt_service.build_status\n(LLR-RT-006)", fillcolor="#2E7D32", fontcolor=white];
+  PackStatus [label="mil1553_word.pack_status\n(LLR-WORD-003)", fillcolor="#4472C4", fontcolor=white];
+  Encode [label="manchester.encode_word\n(LLR-WORD-006)", fillcolor="#4472C4", fontcolor=white];
+  BusOut [label="bus symbols out", shape=parallelogram, fillcolor="#DDDDDD"];
+
+  ErrorLog [label="error log\n(LLR-ERR-004)", fillcolor="#C0392B", fontcolor=white];
+  CbitCounters [label="bit_cbit counters\n(LLR-BIT-005)", fillcolor="#B8860B", fontcolor=white];
+
+  BusIn -> Decode;
+  Decode -> Classify;
+  Classify -> Unpack [label="VALID"];
+  Classify -> ErrorLog [label="SYNC_ERROR /\nMANCHESTER_ERROR /\nPARITY_ERROR", color="#C0392B", fontcolor="#C0392B"];
+  Unpack -> Validate;
+  Validate -> Execute [label="valid"];
+  Validate -> ErrorLog [label="illegal", color="#C0392B", fontcolor="#C0392B"];
+  Execute -> Subsystem;
+  Subsystem -> BuildStatus;
+  BuildStatus -> PackStatus;
+  PackStatus -> Encode;
+  Encode -> BusOut;
+
+  ErrorLog -> CbitCounters;
+
+  { rank=same; BusIn; BusOut; }
+}
