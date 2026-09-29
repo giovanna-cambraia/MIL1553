@@ -1,0 +1,67 @@
+@startuml architecture
+title MIL1553 - Component Diagram (per SDD 2.1)
+
+skinparam componentStyle rectangle
+skinparam component {
+  BackgroundColor<<BC>> #1B3A6B
+  FontColor<<BC>> white
+  BackgroundColor<<RT>> #1B6B3A
+  FontColor<<RT>> white
+  BackgroundColor<<BM>> #6B6B6B
+  FontColor<<BM>> white
+  BackgroundColor<<BIT>> #B8860B
+  FontColor<<BIT>> white
+  BackgroundColor<<TEST>> #B22222
+  FontColor<<TEST>> white
+  BorderStyle<<TEST>> dashed
+}
+
+component "bus_model\n(channel A, channel B,\nvirtual clock)" as BUS
+
+component "bc_scheduler" as BC <<BC>>
+component "rt_service (RT1)" as RT1 <<RT>>
+component "rt_service (RT2)" as RT2 <<RT>>
+component "bm_monitor" as BM <<BM>>
+
+component "bit_pbit" as PBIT_BC <<BIT>>
+component "bit_cbit" as CBIT_BC <<BIT>>
+component "bit_ibit" as IBIT_BC <<BIT>>
+
+component "bit_pbit" as PBIT_RT1 <<BIT>>
+component "bit_cbit" as CBIT_RT1 <<BIT>>
+component "bit_ibit" as IBIT_RT1 <<BIT>>
+
+component "error_inject\n(test build only)" as ERR_BC <<TEST>>
+component "error_inject\n(test build only)" as ERR_RT1 <<TEST>>
+
+BC -down-> BUS : bus transport\ncontract (transmit+receive)
+RT1 -down-> BUS : bus transport\ncontract (transmit+receive)
+RT2 -down-> BUS : bus transport\ncontract (transmit+receive)
+BUS .down.> BM : receive-only\ninterface (LLR-BM-003)
+
+BC -- PBIT_BC
+BC -- CBIT_BC
+BC -- IBIT_BC
+
+RT1 -- PBIT_RT1
+RT1 -- CBIT_RT1
+RT1 -- IBIT_RT1
+
+BC .. ERR_BC : hook table\n(test build only)
+RT1 .. ERR_RT1 : hook table\n(test build only)
+
+note right of ERR_BC
+  Dashed border = test-only.
+  Not present in release
+  link inputs (LLR-ERR-005).
+end note
+
+note bottom of BM
+  bm_monitor links only the
+  receive-only subset of the
+  bus_model interface -
+  bus_transmit is unreachable
+  from this component.
+end note
+
+@enduml
