@@ -145,3 +145,76 @@ bool mil1553_word_pack_status(const mil1553_status_fields_t *fields,
 
     return manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
 }
+
+// implements: LLR-1553-WORD-003
+void mil1553_word_unpack_status(uint16_t field, mil1553_status_fields_t *out_fields)
+{
+    uint16_t reserved_bits = (uint16_t)((field >> WORD_STATUS_RESERVED_SHIFT) & WORD_STATUS_RESERVED_MASK);
+
+    out_fields->rt_address = (mil1553_rt_addr_t)((field >> WORD_STATUS_RT_ADDR_SHIFT) & WORD_FIELD_5BIT_MASK);
+    out_fields->message_error = (((field >> WORD_STATUS_ME_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->instrumentation = (((field >> WORD_STATUS_INSTR_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->service_request = (((field >> WORD_STATUS_SR_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->broadcast_received = (((field >> WORD_STATUS_BCR_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->busy = (((field >> WORD_STATUS_BUSY_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->subsystem_flag = (((field >> WORD_STATUS_SF_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->dbc_acceptance = (((field >> WORD_STATUS_DBCA_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->terminal_flag = (((field >> WORD_STATUS_TF_SHIFT) & WORD_FIELD_1BIT_MASK) != 0U);
+    out_fields->reserved_nonzero = (reserved_bits != 0U);
+}
+
+// data word, LLR-1553-WORD-004
+
+// implements: LLR-1553-WORD-004
+void mil1553_word_pack_data(mil1553_data_t value, mil1553_symbols_t out_symbols);
+{
+    uint8_t parity = crc_parity_compute((uint16_t)value);
+
+    (void)mil1553_manchester_encode_word(MIL1553_SYNC_DATA, (uint16_t)value, parity, out_symbols);
+}
+
+// implements: LLR-1553_WORD-004
+mil1553_data_t mil1553_word_unpack_data(uint16_t field)
+{
+    return (mil1553_data_t)field;
+}
+
+// classification, LLR-1553-WORD-008
+
+// implements: LLR-1553-008
+mil1553_word_class_t mil1553_word_classify(const mil1553_symbols_t in_symbols, mil1553_decoded_word_t *out_decoded)
+{
+    mil1553_sync_t sync;
+    uint16_t field;
+    uint8_t parity;
+    bool violation;
+    mil1553_word_class_t result;
+
+    (void)manchester_decode_word(in_symbols, &sync, &field, &parity, &violation);
+
+    out_decoded->sync = sync;
+    out_decoded->field = field;
+    out_decoded->parity = parity;
+
+    // precedence order per LLR-1553-WORD-008: sync -> Manchester -> parity
+    if (sync == MIL1553_SYNC_INVALID)
+    {
+        result = MIL1553_WORD_SYNC_ERROR;
+    }
+    else if (violation)
+    {
+        result = MIL1553_WORD_MANCHESTER_ERROR;
+    }
+    else if (!crc_parity_check(field, parity))
+    {
+        result = MIL1553_WORD_PARITY_ERROR;
+    }
+    else
+    {
+        result = MIL1553_WORD_VALID;
+    }
+
+    out_decoded->classification = result;
+
+    return result;
+}
