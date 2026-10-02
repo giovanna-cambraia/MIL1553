@@ -46,7 +46,7 @@ extern "C"
         returns:
             true on success, false if sync was not a valid transmittable sync type
     */
-    bool mil1553_manchester_encode(mil1553_sync_t sync, uint16_t field, uint8_t parity, mil1553_symbols_t out_symbols);
+    bool mil1553_manchester_encode_word(mil1553_sync_t sync, uint16_t field, uint8_t parity, mil1553_symbols_t out_symbols);
 
     /*
         implements: LLR-1553-WORD-007
