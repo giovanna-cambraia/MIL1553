@@ -28,7 +28,7 @@ extern "C"
     // project-wide constant (design/timing_budget.md 2, SDD 1)
 
 #define MIL1553_BIT_TIME_US (1U)
-#define MIL1553_WORD_TIME_U (20U)
+#define MIL1553_WORD_TIME_US (20U)
 #define MIL1553_T_RESP_MIN_US (4U)
 #define MIL1553_T_RESP_MAX_US (12U)
 #define MIL1553_T_GAP_MIN_US (4U)
