@@ -96,7 +96,7 @@ void bm_run(mil1553_bm_context_t *ctx);
 void bm_reconstruct_messages(mil1553_bm_context_t *ctx);
 
 // implements: LLR-1553-BM-001
-const mil1553_bm_capture_buffer_t *bm_get_capture(const mil1553_bm_context_t *ctx);
+const mil1553_bm_capture_buffer_t *bm_get_captures(const mil1553_bm_context_t *ctx);
 
 // implements: LLR-1553-BM-002
 uint16_t bm_get_message_count(const mil1553_bm_context_t *ctx);
