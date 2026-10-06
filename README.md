@@ -1,3 +1,4 @@
+```
 mil1553/
 ├── docs/
 │   ├── PSAC.md
@@ -141,3 +142,4 @@ mil1553/
 ├── mil1553_release.gpr                # NEW — GNAT project, error injection excluded
 ├── mil1553_test.gpr                   # NEW — GNAT project, error injection linked in
 └── README.md
+```
