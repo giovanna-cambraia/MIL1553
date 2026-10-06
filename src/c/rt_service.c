@@ -4,12 +4,12 @@
     realizes: LLR-1553-RT-001 .. LLR-1553-RT-013
 
     design simplifications made at this stage (flagged for review at design baseline, SDP 2.2):
-    - RT supplied data words for mode codes 16 (Transmit Vector Word) and 18 (Transmit Last Command) use placeholder content
-    (the subsystem/diagnostic value a real LRU would supply is outside this project's scope. PSAC 2.3); mode code 19 (transmit BIT Word)
-    is the one real content source, it reads the BIT result flags already tracked in ctx (terminal_flag/subsystem_flag), which is
+    - RT-supplied data words for mode codes 16 (Transmit Vector Word) and 18 (Transmit Last Command) use placeholder content
+    (the subsystem/diagnostic value a real LRU would supply is outside this project's scope, PSAC 2.3); mode code 19 (Transmit BIT Word)
+    is the one real content source - it reads the BIT result flags already tracked in ctx (terminal_flag/subsystem_flag), which is
     genuine, not a placeholder
     - a word addressed to another RT is identified by comparing the best-effort decoded rt_address field even when word-level
-    classification is not valid; this means a transmission error error that also corrupts the addresss bits may occasionally be
+    classification is not VALID; this means a transmission error that also corrupts the address bits may occasionally be
     mis-filtered as "not addressed to me" rather than logged; this mirrors how a real RT's address comparator (often a separate,
     earlier hardware stage from full word validation) behaves, and is accepted here as a modeling simplification (mil1553_notes.md
     7, host-based environment boundary)
@@ -255,14 +255,14 @@ bool rt_run(mil1553_rt_context_t *ctx)
     case MIL1553_RT_STATE_FAIL_SAFE:
     {
         // FAIL_SAFE still listens for commands addressed to self (LLR-1553-RT-013); both channels are polled, command
-        // channel preferred_bus becomes whichever one the word arrived on 
+        // channel preferred_bus becomes whichever one the word arrived on
         mil1553_bus_record_t record;
         mil1553_channel_t ch;
         bool got_word = false;
 
         for (ch = MIL1553_CHANNEL_A; (ch <= MIL1553_CHANNEL_B) && (!got_word); ch++)
         {
-            if (bus_model_receive(ctx->bus, ch, &record))
+            if (bus_model_receive(ctx->bus, ch, ctx->own_terminal_id, &record))
             {
                 got_word = true;
 
@@ -279,7 +279,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
                 if (!addressed_to_me)
                 {
-                    // implements: LLR-1553-RT-001 - silently ignore 
+                    // implements: LLR-1553-RT-001 - silently ignore
                 }
                 else
                 {
@@ -288,7 +288,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
                     ctx->pending_is_broadcast = (cmd_fields.rt_address == MIL1553_RT_ADDR_BROADCAST);
                     ctx->pending_is_mode_code = ((cmd_fields.subaddress == 0U) || (cmd_fields.subaddress == 31U));
 
-                    // ME latch cleared on next valid command word (LLR-1553-RT-006) 
+                    // ME latch cleared on next valid command word (LLR-1553-RT-006)
                     if (cls == MIL1553_WORD_VALID)
                     {
                         ctx->message_error_latched = false;
@@ -349,7 +349,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
             if (!m->supported)
             {
-                ctx->pending_validation = MIL1553_CMD_ILLEGAL_SUBADDRESS; // unsupported mode code 
+                ctx->pending_validation = MIL1553_CMD_ILLEGAL_SUBADDRESS; // unsupported mode code
                 ctx->state = MIL1553_RT_STATE_ERROR;
             }
             else if (m->has_data_word && m->data_from_bc)
@@ -413,7 +413,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
         {
             mil1553_bus_record_t record;
 
-            if (bus_model_receive(ctx->bus, ctx->pending_channel, &record))
+            if (bus_model_receive(ctx->bus, ctx->pending_channel, ctx->own_terminal_id, &record))
             {
                 mil1553_decoded_word_t decoded;
                 mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
@@ -552,7 +552,6 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
     return true;
 }
-
 
 mil1553_rt_state_t rt_get_state(const mil1553_rt_context_t *ctx)
 {

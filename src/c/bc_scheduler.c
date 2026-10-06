@@ -3,7 +3,7 @@
 
     realizes: LLR-1553-BC-001 .. LLR-1553-BC-010, LLR-1553-REDUN-001 .. LLR-1553-REDUN-003
 
-    design amplification made at this stage (flagged for review at design baseline, SDP 2.2):
+    design simplifications made at this stage (flagged for review at design baseline, SDP 2.2):
         - BC-supplied data words (BC-to-RT, mode code w/ mode_data_from_bc) have no real
         "mission computer" data source in this project's scope (PSAC 2.3 system boundary excludes
         higher-level mission software), a deterministic placeholder pattern (word index value)
@@ -12,7 +12,7 @@
         - bc_run_frame checks the no-response timeout only on polls that return no word (LLR-1553-BC-009
         is still met: timeout is declared no earlier than T_NORESP_US and is checked every call while no
         word has arrived, so detection latency is bounded by call frequency, not missed)
-        - channel selection for a message`s *first* attemp is always ctx->primary_bus (the live REDUN-002
+        - channel selection for a message's *first* attempt is always ctx->primary_bus (the live REDUN-002
         designation), not each entry's preferred_bus, preferred_bus is reserved for schedule validation
         grouping; this keeps "primary bus" a single BC-wide concept, matching LLR-1553-REDUN-002's per BC
         (not per message) failover
@@ -28,12 +28,12 @@ static mil1553_time_us_t bc_now(const mil1553_bc_context_t *ctx)
     return bus_model_now_us(ctx->bus);
 }
 
-static mil1553_channel_t bc_alternate_channel(mil1553_channel_t channel);
+static mil1553_channel_t bc_alternate_channel(mil1553_channel_t channel)
 {
-    return (channel = MIL1553_CHANNEL_A) ? MIL1533_CHANNEL_B : MIL1553_CHANNEL_A;
+    return (channel == MIL1553_CHANNEL_A) ? MIL1553_CHANNEL_B : MIL1553_CHANNEL_A;
 }
 
-static uint8_t bc_channel_index(mil1553_channel_t)
+static uint8_t bc_channel_index(mil1553_channel_t channel)
 {
     return (channel == MIL1553_CHANNEL_A) ? 0U : 1U;
 }
@@ -62,7 +62,7 @@ static void bc_log_error(mil1553_bc_context_t *ctx, mil1553_channel_t channel,
 static void bc_transmit_word(mil1553_bc_context_t *ctx, mil1553_channel_t channel, const mil1553_symbols_t symbols)
 {
     (void)bus_model_transmit(ctx->bus, channel, symbols, MIL1553_TERMINAL_BC);
-    bus_model_advances_us(ctx->bus, (mil1553_time_us_t)MIL1553_WORD_TIME_US);
+    bus_model_advance_us(ctx->bus, (mil1553_time_us_t)MIL1553_WORD_TIME_US);
 }
 
 // implements: LLR-1553-BC-001 (duration formula per timing_budget.md 4)
@@ -74,12 +74,13 @@ uint32_t bc_message_duration_us(const mil1553_bc_schedule_entry_t *entry)
     switch (entry->msg_type)
     {
     case MIL1553_MSG_BC_TO_RT:
-        // cmd + resp_delay(max) + status + data(N) + gap
+        // cmd + data(N) + resp_delay(max) + status + gap
         duration = MIL1553_WORD_TIME_US + (n * MIL1553_WORD_TIME_US) +
                    MIL1553_T_RESP_MAX_US + MIL1553_WORD_TIME_US + MIL1553_T_GAP_MIN_US;
         break;
 
     case MIL1553_MSG_RT_TO_BC:
+        // cmd + resp_delay(max) + status + data(N) + gap
         duration = MIL1553_WORD_TIME_US + MIL1553_T_RESP_MAX_US +
                    MIL1553_WORD_TIME_US + (n * MIL1553_WORD_TIME_US) + MIL1553_T_GAP_MIN_US;
         break;
@@ -198,8 +199,9 @@ bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
 }
 
 // implements: LLR-1553-BC-001, LLR-1553-REDUN-001, LLR-1553-REDUN-002
-bool bc_init(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_t *bus,
-             mil1553_channel_t initial_primary_bus, uint8_t fail_threshold)
+bool bc_init(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_t *schedule,
+             mil1553_bus_model_context_t *bus, mil1553_channel_t initial_primary_bus,
+             uint8_t fail_threshold)
 {
     uint8_t i;
 
@@ -273,14 +275,14 @@ void bc_stop(mil1553_bc_context_t *ctx)
 static void bc_begin_response_tracking(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e)
 {
     ctx->response_stage = 0U;
-    ctx->response_data_word_received = 0U;
+    ctx->response_data_words_received = 0U;
 
     switch (e->msg_type)
     {
     case MIL1553_MSG_BC_TO_RT:
         ctx->response_primary_rt = e->rt_address;
         ctx->response_is_rt_to_rt = false;
-        ctx->response_data_word_expected = 0U;
+        ctx->response_data_words_expected = 0U;
         break;
 
     case MIL1553_MSG_RT_TO_BC:
@@ -337,7 +339,7 @@ static void bc_issue_bc_to_rt(mil1553_bc_context_t *ctx, const mil1553_bc_schedu
 }
 
 // implements: LLR-1553-BC-004
-static void bc_issue_rt_to_bc(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t)
+static void bc_issue_rt_to_bc(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
 {
     mil1553_command_fields_t cmd;
     mil1553_word_count_t wc_field;
@@ -425,7 +427,7 @@ static void bc_issue_broadcast(mil1553_bc_context_t *ctx, const mil1553_bc_sched
     }
 }
 
-static void bc_issue_manage(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
+static void bc_issue_message(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
 {
     switch (e->msg_type)
     {
@@ -515,10 +517,10 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
         for (i = 0U; (i < ctx->schedule.entry_count) && (!issued_one); i++)
         {
             const mil1553_bc_schedule_entry_t *e = &ctx->schedule.entries[i];
-            bool rt_is_dowm = ((e->rt_address <= MIL1553_RT_ADDR_MAX) && ctx->rt_failed_this_major_frame[e->rt_address]);
+            bool rt_is_down = ((e->rt_address <= MIL1553_RT_ADDR_MAX) && ctx->rt_failed_this_major_frame[e->rt_address]);
 
-            if ((e->minor_frame_index == ctx->current_minot_frame) && (!ctx->entry_issued[i]) &&
-                (!rt_is_dowm) && (elapsed >= (mil1553_time_us_t)e->slot_offset_us))
+            if ((e->minor_frame_index == ctx->current_minor_frame) && (!ctx->entry_issued[i]) &&
+                (!rt_is_down) && (elapsed >= (mil1553_time_us_t)e->slot_offset_us))
             {
                 ctx->entry_issued[i] = true;
                 ctx->current_entry_snapshot_index = i;
@@ -579,7 +581,7 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
     {
         mil1553_bus_record_t record;
 
-        if (bus_model_receive(ctx->bus, ctx->current_message_bus, &record))
+        if (bus_model_receive(ctx->bus, ctx->current_message_bus, MIL1553_TERMINAL_BC, &record))
         {
             mil1553_decoded_word_t decoded;
             mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
@@ -772,5 +774,3 @@ void bc_get_health(const mil1553_bc_context_t *ctx, mil1553_bc_health_t *out_hea
         out_health->rt_failed[i] = ctx->rt_failed_this_major_frame[i];
     }
 }
- 
-                

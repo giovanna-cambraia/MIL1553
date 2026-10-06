@@ -1,14 +1,14 @@
 /*
     project: MIL1553
 
-    realizes: LLR-1553-BM-001, LLR-1553-BM-002, LLE-1553-BM-003
+    realizes: LLR-1553-BM-001, LLR-1553-BM-002, LLR-1553-BM-003
 
     design simplifications made at this stage (flagged for review at design baseline, SDP 2.2):
-        - message reconstruction (bm_reconstruct_messages) trates every VALID, BC-sent command/status-sync word as the start of a new message, rather than requiring
+        - message reconstruction (bm_reconstruct_messages) treats every VALID, BC-sent command/status-sync word as the start of a new message, rather than requiring
         an explicit inter-message-gap measurement; this is sound because, by construction, the BC (bc_scheduler) never transmits a new command word until the previous
         message (including any retry) has completed, so the next BC-sent word reliably marks the next message's start; a corrupted (non-VALID) BC-sent word is captured
         (LLR-1553-BM-001) but does not start a reconstructed message; it is visible in the raw capture buffer for anyone inspecting captures directly
-        - reconstruction is run per-channel (bm_reconstruct_channel), processing only that channel's records in capture order, since a single BC/TC exchange occurs on one
+        - reconstruction is run per-channel (bm_reconstruct_channel), processing only that channel's records in capture order, since a single BC/RT exchange occurs on one
         channel at a time (retries switch channel but do not run concurrently, LLR-1553-REDUN-001)
 */
 
@@ -18,11 +18,11 @@
 // implements: LLR-1553-BM-001
 void bm_init(mil1553_bm_context_t *ctx, mil1553_bus_model_context_t *bus)
 {
-    ctx->bus;
+    ctx->bus = bus;
     ctx->capture.count = 0U;
     ctx->capture.dropped_count = 0U;
     ctx->message_count = 0U;
-    ctx->message_oveflow_count = 0U;
+    ctx->message_overflow_count = 0U;
 }
 
 // implements: LLR-1553-BM-001
@@ -34,7 +34,7 @@ static void bm_capture_one(mil1553_bm_context_t *ctx, mil1553_channel_t channel)
     // drain everything currently queued on this channel, bounded by the bus model's own queue capacity (MISRA: bounded loop)
     for (drained = 0U; drained < BUS_MODEL_QUEUE_CAPACITY; drained++)
     {
-        if (!bus_model_receive(ctx->bus, channel, &record))
+        if (!bus_model_receive(ctx->bus, channel, MIL1553_TERMINAL_BM, &record))
         {
             break;
         }
@@ -46,6 +46,15 @@ static void bm_capture_one(mil1553_bm_context_t *ctx, mil1553_channel_t channel)
 
             slot->channel = channel;
             slot->start_time_us = record.timestamp_us;
+            {
+                uint8_t k;
+                for (k = 0U; k < 5U; k++)
+                {
+                    slot->symbols[k] = record.symbols[k];
+                }
+            }
+            slot->sender = record.sender;
+            slot->classification = mil1553_word_classify(record.symbols, &decoded);
 
             ctx->capture.count++;
         }
@@ -64,7 +73,7 @@ void bm_run(mil1553_bm_context_t *ctx)
 }
 
 // implements: LLR-1553-BM-002 (message type classification from command fields)
-static mil1553_msg_type_t bm_classify_message_type(const mil1553_command_fields_t *cmd);
+static mil1553_msg_type_t bm_classify_message_type(const mil1553_command_fields_t *cmd)
 {
     mil1553_msg_type_t result;
 
@@ -82,7 +91,7 @@ static mil1553_msg_type_t bm_classify_message_type(const mil1553_command_fields_
     }
     else
     {
-        result = MIL1553_NSG_RT_TO_BC;
+        result = MIL1553_MSG_RT_TO_BC;
     }
 
     return result;
@@ -97,7 +106,7 @@ static void bm_add_message(mil1553_bm_context_t *ctx, const mil1553_bm_message_t
     }
     else
     {
-        ctx->message_oveflow_count++;
+        ctx->message_overflow_count++;
     }
 }
 
@@ -109,14 +118,14 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
     for (i = 0U; i < ctx->capture.count; i++)
     {
         const mil1553_bm_captured_word_t *w = &ctx->capture.records[i];
-        bool is_bc_command = (w->channel == channel) && (w->sender == MIL1553_TERMINAL_BC) && (W->classification == MIL1553_WORD_VALID);
+        bool is_bc_command = (w->channel == channel) && (w->sender == MIL1553_TERMINAL_BC) && (w->classification == MIL1553_WORD_VALID);
 
         if (is_bc_command)
         {
             mil1553_decoded_word_t decoded;
             mil1553_command_fields_t cmd1;
             mil1553_bm_message_t msg;
-            uint16_t next_bc_index = 1; // set below if a second back-to-back cmd exists
+            uint16_t next_bc_index = i; // set below if a second back-to-back cmd exists
             bool is_rt_to_rt = false;
             uint16_t scan_start;
 
@@ -132,7 +141,7 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
             msg.response_time_us = 0U;
             msg.command_end_time_us = (mil1553_time_us_t)(w->start_time_us + MIL1553_WORD_TIME_US);
 
-            // look immediately ahead (same channel, next captured word for a second BC-sent valid command word with no other channel traffic between them:
+            // look immediately ahead (same channel, next captured word) for a second BC-sent valid command word with no other channel traffic between them:
             // RT-to-RT, LLR-1553-BC-005
             {
                 uint16_t j = (uint16_t)(i + 1U);
@@ -140,7 +149,9 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
                 {
                     j++;
                 }
-                if ((j < ctx->capture.records[j].sender == MIL1553_TERMINAL_BC) && (ctx->capture.records[j].classification == MIL1553_WORD_VALID))
+                if ((j < ctx->capture.count) &&
+                    (ctx->capture.records[j].sender == MIL1553_TERMINAL_BC) &&
+                    (ctx->capture.records[j].classification == MIL1553_WORD_VALID))
                 {
                     mil1553_decoded_word_t decoded2;
                     mil1553_command_fields_t cmd2;
@@ -150,7 +161,7 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
 
                     if (cmd2.tr_bit == MIL1553_TR_TRANSMIT)
                     {
-                        is_rt_to_rt == true;
+                        is_rt_to_rt = true;
                         msg.msg_type = MIL1553_MSG_RT_TO_RT;
                         msg.rt_address_2 = cmd2.rt_address;
                         msg.command_end_time_us = (mil1553_time_us_t)(ctx->capture.records[j].start_time_us + MIL1553_WORD_TIME_US);
@@ -185,7 +196,7 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
                             {
                                 msg.response_seen = true;
                                 msg.response_start_time_us = w2->start_time_us;
-                                msg.response_time_us = (uint32_t)(w2->start_time_us = msg.command_end_time_us);
+                                msg.response_time_us = (uint32_t)(w2->start_time_us - msg.command_end_time_us);
                                 done = true;
                             }
                         }
@@ -194,7 +205,7 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
                     k++;
                 }
             }
-            
+
             bm_add_message(ctx, &msg);
         }
     }
@@ -204,7 +215,7 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
 void bm_reconstruct_messages(mil1553_bm_context_t *ctx)
 {
     ctx->message_count = 0U;
-    ctx->message_oveflow_count = 0U;
+    ctx->message_overflow_count = 0U;
 
     bm_reconstruct_channel(ctx, MIL1553_CHANNEL_A);
     bm_reconstruct_channel(ctx, MIL1553_CHANNEL_B);
@@ -230,5 +241,5 @@ void bm_get_stats(const mil1553_bm_context_t *ctx, mil1553_bm_stats_t *out_stats
     out_stats->captured_count = ctx->capture.count;
     out_stats->dropped_count = ctx->capture.dropped_count;
     out_stats->message_count = ctx->message_count;
-    out_stats->message_overflow_count = ctx->message_oveflow_count;
+    out_stats->message_overflow_count = ctx->message_overflow_count;
 }
