@@ -162,4 +162,97 @@ static bool bit_pbit_check_codec(void)
             }
         }
     }
+
+    if (ok)
+    {
+        mil1553_decoded_word_t decoded;
+        mil1553_data_t value = 0xA5A5U;
+
+        mil1553_word_pack_data(value, symbols);
+        if (mil1553_word_classify(symbols, &decoded) != MIL1553_WORD_VALID)
+        {
+            ok = false;
+        }
+        else if (mil1553_word_unpack_data(decoded.field) != value)
+        {
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
+// implemens: LLR-1553_BIT-001 (timer sanity, 1us tolerance)
+static bool bit_pbit_check_timer(mil1553_bus_model_context_t *bus)
+{
+    mil1553_time_us_t before = bus_model_now_us(bus);
+    mil1553_time_us_t expected_delta = 100U;
+
+    bus_model_advance_us(bus, expected_delta);
+
+    {
+        mil1553_time_us_t after = bus_model_now_us(bus);
+        mil1553_time_us_t actual_delta = (mil1553_time_us_t)(after - before);
+        mil1553_time_us_t diff = (actual_delta >= expected_delta) ? (actual_delta - expected_delta) : (expected_delta - actual_delta);
+
+        return (diff <= 1U); // 1us tolerance, LLR-1553-BIT-001
+    }
+}
+
+// implements: LLR-1553-BIT-001 (bus a/b idle check)
+static bool bit_pbit_check_bus_idle(mil1553_bus_model_context_t *bus, mil1553_terminal_id_t listener_id)
+{
+    mil1553_bus_record_t record;
+    bool idle_a = !bus_model_receive(bus, MIL1553_CHANNEL_A, listener_id, &record);
+    bool idle_b = !bus_model_receive(bus, MIL1553_CHANNEL_B, listener_id, &record);
+
+    return idle_a && idle_b;
+}
+
+// implements: LLR-1553-BIT-001, LLR-1553-BIT-004
+bool bit_pbit_run(mil1553_bit_pbit_context_t *ctx, mil1553_bit_result_t *result, mil1553_bus_model_context_t *bus, mil1553_terminal_id_t listener_id)
+{
+    bool pass = true;
+    uint8_t failing_test = 0U;
+
+    result->state = MIL1553_BIT_STATE_PBIT;
+
+    if (!bit_pbit_check_ram(ctx))
+    {
+        pass = false;
+        failing_test = BIT_PBIT_TEST_RAM;
+    }
+    else if (!bit_pbit_check_rom(ctx))
+    {
+        pass = false;
+        failing_test = BIT_PBIT_TEST_ROM;
+    }
+    else if (!bit_pbit_check_codec())
+    {
+        pass = false;
+        failing_test = BIT_PBIT_TEST_CODEC;
+    }
+    else if (!bit_pbit_check_timer(bus))
+    {
+        pass = false;
+        failing_test = BIT_PBIT_TEST_TIMER;
+    }
+    else if (!bit_pbit_check_bus_idle(bus, listener_id))
+    {
+        pass = false;
+        failing_test = BIT_PBIT_TEST_BUS_IDLE;
+    }
+    else
+    {
+        // all passed
+    }
+
+    result->pbit.ever_run = true;
+    result->pbit.last_passed = pass;
+    result->pbit.failing_test_id = failing_test;
+    result->pbit.timestamp_us = bus_model_now_us(bus);
+
+    result->state = pass ? MIL1553_BIT_STATE_OPERATIONAL : MIL1553_BIT_STATE_FAIL;
+
+    return pass;
 }
