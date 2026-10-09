@@ -88,6 +88,17 @@ static void rt_log_error(mil1553_rt_context_t *ctx, mil1553_channel_t channel, m
     }
 }
 
+// implements: LLR-1553-RT-003, LLR-1553-RT-007, LLR-1553-RT-010
+// discards the whole in-progress message: logs the error, latches ME, marks the message as a transmission
+// error (so ERROR transmits nothing) and enters ERROR
+static void rt_fail_message(mil1553_rt_context_t *ctx, mil1553_error_type_t error_type)
+{
+    rt_log_error(ctx, ctx->pending_channel, error_type, 0U);
+    ctx->message_error_latched = true;
+    ctx->pending_transmission_error = true;
+    ctx->state = MIL1553_RT_STATE_ERROR;
+}
+
 static void rt_transmit_word(mil1553_rt_context_t *ctx, const mil1553_symbols_t symbols)
 {
     (void)bus_model_transmit(ctx->bus, ctx->pending_channel, symbols, ctx->own_terminal_id);
@@ -163,6 +174,7 @@ bool rt_init(mil1553_rt_context_t *ctx, mil1553_rt_addr_t own_address, mil1553_t
     ctx->own_address = own_address;
     ctx->own_terminal_id = own_terminal_id;
     ctx->bus = bus;
+    ctx->cbit = (mil1553_bit_cbit_context_t *)0;
 
     for (i = 0U; i < RT_SUBADDRESS_COUNT; i++)
     {
@@ -182,6 +194,10 @@ bool rt_init(mil1553_rt_context_t *ctx, mil1553_rt_addr_t own_address, mil1553_t
     ctx->pending_is_broadcast = false;
     ctx->pending_is_mode_code = false;
     ctx->pending_transmission_error = false;
+    ctx->pending_is_rt_to_rt = false;
+    ctx->pending_rt_to_rt_status_pending = false;
+    ctx->pending_rt_to_rt_xmit_addr = 0U;
+    ctx->pending_rt_to_rt_wait_start_us = 0U;
     ctx->pending_data_expected = 0U;
     ctx->pending_data_received = 0U;
     ctx->pending_data_to_send = 0U;
@@ -191,6 +207,12 @@ bool rt_init(mil1553_rt_context_t *ctx, mil1553_rt_addr_t own_address, mil1553_t
     ctx->error_log_overflow_count = 0U;
 
     return true;
+}
+
+// implements: LLR-1553-BIT-005, LLR-1553-BIT-006
+void rt_attach_cbit(mil1553_rt_context_t *ctx, mil1553_bit_cbit_context_t *cbit)
+{
+    ctx->cbit = cbit;
 }
 
 void rt_pbit_complete(mil1553_rt_context_t *ctx, bool passed)
@@ -249,6 +271,13 @@ bool rt_run(mil1553_rt_context_t *ctx)
         return false;
     }
 
+    if (ctx->cbit != (mil1553_bit_cbit_context_t *)0)
+    {
+        // implements: LLR-1553-BIT-006: tick first, then kick
+        bit_cbit_tick(ctx->cbit, rt_now(ctx));
+        bit_cbit_watchdog_kick(ctx->cbit, rt_now(ctx));
+    }
+
     switch (ctx->state)
     {
     case MIL1553_RT_STATE_WAIT_COMMAND:
@@ -269,13 +298,25 @@ bool rt_run(mil1553_rt_context_t *ctx)
                 mil1553_decoded_word_t decoded;
                 mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
 
+                if (ctx->cbit != (mil1553_bit_cbit_context_t *)0)
+                {
+                    bit_cbit_record_word(ctx->cbit, ch, cls); // LLR-1553-BIT-005
+                }
+
                 // implements: LLR-1553-RT-001 - best-effort address even on a non-VALID word; see file header
                 // note on this simplification
                 mil1553_command_fields_t cmd_fields;
                 mil1553_word_unpack_command(decoded.field, &cmd_fields);
 
-                bool addressed_to_me = (cmd_fields.rt_address == ctx->own_address) ||
-                                       (cmd_fields.rt_address == MIL1553_RT_ADDR_BROADCAST);
+                // a VALID word with DATA sync is never a command candidate (e.g. another terminal's IBIT pattern
+                // word, LLR-1553-BIT-007); a word with a corrupted sync still falls through to the best-effort
+                // transmission-error path below
+                bool is_command_candidate = (cls != MIL1553_WORD_VALID) ||
+                                             (decoded.sync == MIL1553_SYNC_COMMAND_STATUS);
+
+                bool addressed_to_me = is_command_candidate &&
+                                       ((cmd_fields.rt_address == ctx->own_address) ||
+                                        (cmd_fields.rt_address == MIL1553_RT_ADDR_BROADCAST));
 
                 if (!addressed_to_me)
                 {
@@ -287,6 +328,8 @@ bool rt_run(mil1553_rt_context_t *ctx)
                     ctx->pending_cmd = cmd_fields;
                     ctx->pending_is_broadcast = (cmd_fields.rt_address == MIL1553_RT_ADDR_BROADCAST);
                     ctx->pending_is_mode_code = ((cmd_fields.subaddress == 0U) || (cmd_fields.subaddress == 31U));
+                    ctx->pending_is_rt_to_rt = false;
+                    ctx->pending_rt_to_rt_status_pending = false;
 
                     // ME latch cleared on next valid command word (LLR-1553-RT-006)
                     if (cls == MIL1553_WORD_VALID)
@@ -418,16 +461,67 @@ bool rt_run(mil1553_rt_context_t *ctx)
                 mil1553_decoded_word_t decoded;
                 mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
 
+                if (ctx->cbit != (mil1553_bit_cbit_context_t *)0)
+                {
+                    bit_cbit_record_word(ctx->cbit, ctx->pending_channel, cls); // LLR-1553-BIT-005
+                }
+
                 if (cls != MIL1553_WORD_VALID)
                 {
                     // implements: LLR-1553-RT-003/010 - any word error mid-message discards the whole message
-                    rt_log_error(ctx, ctx->pending_channel,
-                                 (cls == MIL1553_WORD_SYNC_ERROR) ? MIL1553_ERR_SYNC : (cls == MIL1553_WORD_MANCHESTER_ERROR) ? MIL1553_ERR_MANCHESTER
-                                                                                                                              : MIL1553_ERR_PARITY,
-                                 0U);
-                    ctx->message_error_latched = true;
-                    ctx->pending_transmission_error = true;
-                    ctx->state = MIL1553_RT_STATE_ERROR;
+                    rt_fail_message(ctx,
+                                    (cls == MIL1553_WORD_SYNC_ERROR) ? MIL1553_ERR_SYNC :
+                                    (cls == MIL1553_WORD_MANCHESTER_ERROR) ? MIL1553_ERR_MANCHESTER :
+                                    MIL1553_ERR_PARITY);
+                }
+                else if (ctx->pending_is_rt_to_rt && ctx->pending_rt_to_rt_status_pending)
+                {
+                    // implements: LLR-1553-RT-007 (receiving RT): the next word must be the transmitting RT's status
+                    mil1553_status_fields_t xmit_status;
+                    mil1553_word_unpack_status(decoded.field, &xmit_status);
+
+                    if (decoded.sync != MIL1553_SYNC_COMMAND_STATUS)
+                    {
+                        rt_fail_message(ctx, MIL1553_ERR_WORD_COUNT_MISMATCH);
+                    }
+                    else if (xmit_status.rt_address != ctx->pending_rt_to_rt_xmit_addr)
+                    {
+                        rt_fail_message(ctx, MIL1553_ERR_STATUS_ADDRESS_MISMATCH);
+                    }
+                    else if (xmit_status.message_error)
+                    {
+                        rt_fail_message(ctx, MIL1553_ERR_STATUS_ME);
+                    }
+                    else
+                    {
+                        ctx->pending_rt_to_rt_status_pending = false;
+                    }
+                }
+                else if (decoded.sync == MIL1553_SYNC_COMMAND_STATUS)
+                {
+                    // implements: LLR-1553-RT-007: a command/status-sync word where a data word was expected;
+                    // legitimate only as the very first word after a receive command: the BC's paired transmit
+                    // command to another RT (RT-to-RT); anywhere else it means the message is short, i.e. a word count error
+                    mil1553_command_fields_t paired;
+                    mil1553_word_unpack_command(decoded.field, &paired);
+
+                    if ((ctx->pending_data_received == 0U) &&
+                        (!ctx->pending_is_mode_code) &&
+                        (!ctx->pending_is_broadcast) &&
+                        (!ctx->pending_is_rt_to_rt) &&
+                        (paired.tr_bit == MIL1553_TR_TRANSMIT) &&
+                        (paired.rt_address <= MIL1553_RT_ADDR_MAX) &&
+                        (paired.rt_address != ctx->own_address))
+                    {
+                        ctx->pending_is_rt_to_rt = true;
+                        ctx->pending_rt_to_rt_status_pending = true;
+                        ctx->pending_rt_to_rt_xmit_addr = paired.rt_address;
+                        ctx->pending_rt_to_rt_wait_start_us = rt_now(ctx);
+                    }
+                    else
+                    {
+                        rt_fail_message(ctx, MIL1553_ERR_WORD_COUNT_MISMATCH);
+                    }
                 }
                 else
                 {
@@ -455,7 +549,17 @@ bool rt_run(mil1553_rt_context_t *ctx)
                     // else: remain in EXECUTE, awaiting more data
                 }
             }
-            // else: no word yet this call; remain in EXECUTE and wait (bounded by the BC's own inter-word timing)
+            else if (ctx->pending_is_rt_to_rt && ctx->pending_rt_to_rt_status_pending &&
+                     ((mil1553_time_us_t)(rt_now(ctx) - ctx->pending_rt_to_rt_wait_start_us) >=
+                      (mil1553_time_us_t)MIL1553_T_NORESP_US))
+            {
+                // implements: LLR-1553-RT-007: the transmitting RT never answered; discard, ME set, no status sent
+                rt_fail_message(ctx, MIL1553_ERR_NO_RESPONSE);
+            }
+            else
+            {
+                // no word yet this call; remain in EXECUTE and wait (bounded by the BC's own inter-word timing)
+            }
         }
         else
         {

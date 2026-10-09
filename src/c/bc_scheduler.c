@@ -35,7 +35,7 @@ static mil1553_channel_t bc_alternate_channel(mil1553_channel_t channel)
 
 static uint8_t bc_channel_index(mil1553_channel_t channel)
 {
-    return (channel == MIL1553_CHANNEL_A) ? 0U : 1U;
+    return (uint8_t)((channel == MIL1553_CHANNEL_A) ? 0U : 1U);
 }
 
 // implements: LLR-1553-ERR-004 (BC side)
@@ -213,6 +213,7 @@ bool bc_init(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_t *schedule,
 
     ctx->schedule = *schedule;
     ctx->bus = bus;
+    ctx->cbit = (mil1553_bit_cbit_context_t *)0;
     ctx->state = MIL1553_BC_STATE_IDLE;
     ctx->current_minor_frame = 0U;
     ctx->current_entry_index = 0U;
@@ -230,6 +231,7 @@ bool bc_init(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_t *schedule,
     ctx->retry_used_for_current_message = false;
     ctx->current_message_bus = initial_primary_bus;
     ctx->message_start_time_us = 0U;
+    ctx->last_activity_end_us = 0U;
     ctx->minor_frame_start_time_us = 0U;
 
     ctx->current_entry_snapshot_index = 0U;
@@ -265,10 +267,16 @@ bool bc_start(mil1553_bc_context_t *ctx)
     return true;
 }
 
-// implements LLR-1553-BC-010
+// implements: LLR-1553-BC-010
 void bc_stop(mil1553_bc_context_t *ctx)
 {
     ctx->state = MIL1553_BC_STATE_IDLE;
+}
+
+// implements: LLR-1553-BIT-005, LLR-1553-BIT-006
+void bc_attach_cbit(mil1553_bc_context_t *ctx, mil1553_bit_cbit_context_t *cbit)
+{
+    ctx->cbit = cbit;
 }
 
 // message issuance, LLR-1553-BC-003 .. LLR-1553-BC-007
@@ -427,8 +435,39 @@ static void bc_issue_broadcast(mil1553_bc_context_t *ctx, const mil1553_bc_sched
     }
 }
 
+/*
+    implements: LLR-1553-BC-009, LLR-1553-REDUN-001
+
+    words still unread on either channel when a new command is about to go out belong to an earlier, finished
+    or aborted transaction (e.g. the data words that followed a status word the BC rejected); they must not be
+    mistaken for the response to the new command, so they are discarded first; bounded by the bus queue capacity
+    (MISRA: bounded loop)
+*/
+static void bc_discard_stale_words(mil1553_bc_context_t *ctx)
+{
+    mil1553_bus_record_t scratch;
+    uint8_t n;
+
+    for (n = 0U; n < BUS_MODEL_QUEUE_CAPACITY; n++)
+    {
+        if (!bus_model_receive(ctx->bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, &scratch))
+        {
+            break;
+        }
+    }
+    for (n = 0U; n < BUS_MODEL_QUEUE_CAPACITY; n++)
+    {
+        if (!bus_model_receive(ctx->bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_BC, &scratch))
+        {
+            break;
+        }
+    }
+}
+
 static void bc_issue_message(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
 {
+    bc_discard_stale_words(ctx);
+
     switch (e->msg_type)
     {
     case MIL1553_MSG_BC_TO_RT:
@@ -458,16 +497,29 @@ static void bc_issue_message(mil1553_bc_context_t *ctx, const mil1553_bc_schedul
 
 // redundancy handling, LLR-1553-REDUN-001 .. 003
 
-// implements: LLR-1553-REDUN-003
+/* 
+    implements: LLR-1553-REDUN-003
+
+    for RT-to-RT the stage at which the response stalled identifies the culprit: stage 2 means the transmitting RT
+    answered (status + data) and only the receiving RT's closing status is missing; stage 0 or 1 means the transmitting
+    RT is the one that stopped; blaming both would needlessly drop a healthy RT's other messages for the major frame
+*/
 static void bc_mark_rt_failed(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e)
 {
-    if (e->rt_address <= MIL1553_RT_ADDR_MAX)
+    mil1553_rt_addr_t culprit;
+
+    if (e->msg_type == MIL1553_MSG_RT_TO_RT)
     {
-        ctx->rt_failed_this_major_frame[e->rt_address] = true;
+        culprit = (ctx->response_stage == 2U) ? e->rt_address : e->rt_address_2;
     }
-    if ((e->msg_type == MIL1553_MSG_RT_TO_RT) && (e->rt_address_2 <= MIL1553_RT_ADDR_MAX))
+    else
     {
-        ctx->rt_failed_this_major_frame[e->rt_address_2] = true;
+        culprit = e->rt_address;
+    }
+
+    if (culprit <= MIL1553_RT_ADDR_MAX)
+    {
+        ctx->rt_failed_this_major_frame[culprit] = true;
     }
 }
 
@@ -478,6 +530,13 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
     if (ctx->state == MIL1553_BC_STATE_IDLE)
     {
         return false;
+    }
+
+    if (ctx->cbit != (mil1553_bit_cbit_context_t *)0)
+    {
+        // implements: LLR-1553-BIT-006: tick first (detects a stall since the previous call), then kick (this call is progress)
+        bit_cbit_tick(ctx->cbit, bc_now(ctx));
+        bit_cbit_watchdog_kick(ctx->cbit, bc_now(ctx));
     }
 
     switch (ctx->state)
@@ -529,6 +588,7 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
 
                 bc_issue_message(ctx, e, ctx->current_message_bus);
                 ctx->message_start_time_us = bc_now(ctx);
+                ctx->last_activity_end_us = ctx->message_start_time_us;
 
                 if (e->msg_type == MIL1553_MSG_BROADCAST)
                 {
@@ -585,6 +645,26 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
         {
             mil1553_decoded_word_t decoded;
             mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
+
+            {
+                // implements: LLR-1553-BC-009: the timeout window restarts from the end of each word actually received
+                mil1553_time_us_t word_end = (mil1553_time_us_t)(record.timestamp_us + MIL1553_WORD_TIME_US);
+                if (word_end > ctx->last_activity_end_us)
+                {
+                    ctx->last_activity_end_us = word_end;
+                }
+            }
+
+            if (ctx->cbit != (mil1553_bit_cbit_context_t *)0)
+            {
+                // implements: LLR-1553-BIT-005
+                bit_cbit_record_word(ctx->cbit, ctx->current_message_bus, cls);
+                if ((cls == MIL1553_WORD_VALID) && (ctx->response_stage == 0U))
+                {
+                    bit_cbit_record_response_time(ctx->cbit,
+                        (uint32_t)(record.timestamp_us - ctx->message_start_time_us));
+                }
+            }
 
             if (cls != MIL1553_WORD_VALID)
             {
@@ -685,11 +765,17 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
             }
             else
             {
-                mil1553_time_us_t elapsed = (mil1553_time_us_t)(bc_now(ctx) - ctx->message_start_time_us);
+                mil1553_time_us_t elapsed = (mil1553_time_us_t)(bc_now(ctx) - ctx->last_activity_end_us);
  
                 if (elapsed >= (mil1553_time_us_t)MIL1553_T_NORESP_US)
                 {
-                    bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_NO_RESPONSE,
+                    // implements: LLR-1553-ERR-003: a stall in the middle of the data phase means fewer valid data words
+                    // arrived than the command word count promised; a stall before any status is a plain no-response
+                    bool short_data = (ctx->response_stage == 1U) &&
+                                      (ctx->response_data_words_received < ctx->response_data_words_expected);
+
+                    bc_log_error(ctx, ctx->current_message_bus,
+                                 short_data ? MIL1553_ERR_WORD_COUNT_MISMATCH : MIL1553_ERR_NO_RESPONSE,
                                  (uint32_t)ctx->current_entry_snapshot_index);
                     ctx->state = MIL1553_BC_STATE_TIMEOUT;
                 }
@@ -741,6 +827,7 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
             bus_model_advance_us(ctx->bus, (mil1553_time_us_t)MIL1553_T_GAP_MIN_US);
             bc_issue_message(ctx, e, ctx->current_message_bus);
             ctx->message_start_time_us = bc_now(ctx);
+            ctx->last_activity_end_us = ctx->message_start_time_us;
             bc_begin_response_tracking(ctx, e);
  
             ctx->state = MIL1553_BC_STATE_WAIT_RESPONSE;

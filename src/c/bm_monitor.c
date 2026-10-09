@@ -118,18 +118,25 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
     for (i = 0U; i < ctx->capture.count; i++)
     {
         const mil1553_bm_captured_word_t *w = &ctx->capture.records[i];
-        bool is_bc_command = (w->channel == channel) && (w->sender == MIL1553_TERMINAL_BC) && (w->classification == MIL1553_WORD_VALID);
+        mil1553_decoded_word_t decoded;
+        bool is_bc_command = false;
+
+        decoded.sync = MIL1553_SYNC_INVALID;
+        if ((w->channel == channel) && (w->sender == MIL1553_TERMINAL_BC) &&
+            (w->classification == MIL1553_WORD_VALID))
+        {
+            // a BC-sent word starts a message only if it is a command (COMMAND_STATUS sync); BC-sent DATA-sync words belong to the message already in progress
+            (void)mil1553_word_classify(w->symbols, &decoded);
+            is_bc_command = (decoded.sync == MIL1553_SYNC_COMMAND_STATUS);
+        }
 
         if (is_bc_command)
         {
-            mil1553_decoded_word_t decoded;
             mil1553_command_fields_t cmd1;
             mil1553_bm_message_t msg;
             uint16_t next_bc_index = i; // set below if a second back-to-back cmd exists
-            bool is_rt_to_rt = false;
             uint16_t scan_start;
 
-            (void)mil1553_word_classify(w->symbols, &decoded);
             mil1553_word_unpack_command(decoded.field, &cmd1);
 
             msg.channel = channel;
@@ -159,9 +166,8 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
                     (void)mil1553_word_classify(ctx->capture.records[j].symbols, &decoded2);
                     mil1553_word_unpack_command(decoded2.field, &cmd2);
 
-                    if (cmd2.tr_bit == MIL1553_TR_TRANSMIT)
+                    if ((decoded2.sync == MIL1553_SYNC_COMMAND_STATUS) && (cmd2.tr_bit == MIL1553_TR_TRANSMIT))
                     {
-                        is_rt_to_rt = true;
                         msg.msg_type = MIL1553_MSG_RT_TO_RT;
                         msg.rt_address_2 = cmd2.rt_address;
                         msg.command_end_time_us = (mil1553_time_us_t)(ctx->capture.records[j].start_time_us + MIL1553_WORD_TIME_US);
@@ -175,38 +181,53 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
             {
                 uint16_t k = scan_start;
                 bool done = false;
+                // end of the last BC-sent word of this message: the command, or the last BC data word for a
+                // receive-type message; the response time runs from here (LLR-1553-BM-002)
+                mil1553_time_us_t last_bc_end = msg.command_end_time_us;
 
                 while ((k < ctx->capture.count) && (!done))
                 {
                     const mil1553_bm_captured_word_t *w2 = &ctx->capture.records[k];
 
-                    if (w2->channel == channel)
+                    if ((w2->channel == channel) && (w2->classification == MIL1553_WORD_VALID))
                     {
-                        if ((w2->sender == MIL1553_TERMINAL_BC) && (w2->classification == MIL1553_WORD_VALID))
-                        {
-                            // next message has already started; no response was observed for this one
-                            done = true;
-                        }
-                        else if (w2->classification == MIL1553_WORD_VALID)
-                        {
-                            mil1553_decoded_word_t decoded3;
-                            mil1553_word_class_t cls3 = mil1553_word_classify(w2->symbols, &decoded3);
+                        mil1553_decoded_word_t decoded3;
+                        (void)mil1553_word_classify(w2->symbols, &decoded3);
 
-                            if ((cls3 == MIL1553_WORD_VALID) && (decoded3.sync == MIL1553_SYNC_COMMAND_STATUS))
+                        if (w2->sender == MIL1553_TERMINAL_BC)
+                        {
+                            if (decoded3.sync == MIL1553_SYNC_COMMAND_STATUS)
                             {
-                                msg.response_seen = true;
-                                msg.response_start_time_us = w2->start_time_us;
-                                msg.response_time_us = (uint32_t)(w2->start_time_us - msg.command_end_time_us);
+                                // next message has started; no response was observed for this one
                                 done = true;
                             }
+                            else
+                            {
+                                // a BC data word of this same message
+                                last_bc_end = (mil1553_time_us_t)(w2->start_time_us + MIL1553_WORD_TIME_US);
+                            }
+                        }
+                        else if (decoded3.sync == MIL1553_SYNC_COMMAND_STATUS)
+                        {
+                            msg.response_seen = true;
+                            msg.response_start_time_us = w2->start_time_us;
+                            msg.response_time_us = (uint32_t)(w2->start_time_us - last_bc_end);
+                            done = true;
+                        }
+                        else
+                        {
+                            // RT data word (DATA sync) - not the status
                         }
                     }
 
                     k++;
                 }
+
+                msg.command_end_time_us = last_bc_end;
             }
 
             bm_add_message(ctx, &msg);
+            i = next_bc_index; // skip the paired transmit command of an RT-to-RT message
         }
     }
 }
