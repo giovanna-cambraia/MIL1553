@@ -1,0 +1,100 @@
+# error_scenarios.yaml - error injection campaign (TEST BUILD ONLY)
+# signed by error_scenarios.sig (SHA-256). ANY edit, including whitespace or line-ending changes, invalidates the signature: re-sign after review;
+# schema: see src/c/errinject/error_inject.h
+
+# campaign schedule (tests/error_injection/campaign_main.c):
+#   [0] BC -> RT1  sub1  2 words   [1] RT2 -> BC  sub2  2 words
+#   [2] RT2 -> RT1 sub1/sub2  2 words
+scenarios:
+  - id: ERR-001
+    target: RT1
+    bus: A
+    fault: PARITY_BIT_FLIP
+    word_index: 0
+    count: 1
+    expected_detection: PARITY
+    hlr: HLR-1553-ERR-001
+    llr: LLR-1553-ERR-001
+    test_id: TC-ERR-001
+
+  - id: ERR-002
+    target: RT2
+    fault: SUPPRESS_RESPONSE
+    duration_ms: 50
+    expected_detection: NO_RESPONSE
+    expected_recovery: RT_MARKED_FAILED
+    hlr: HLR-1553-ERR-002
+    llr: LLR-1553-REDUN-003
+    test_id: TC-ERR-002
+
+  - id: ERR-003
+    target: RT1
+    bus: A
+    fault: DELAY_RESPONSE
+    delay_us: 20          # response starts outside the 4-12 us window
+    expected_detection: CBIT_RESPONSE_TIME
+    hlr: HLR-1553-RT-002
+    llr: LLR-1553-BIT-005
+    test_id: TC-ERR-003
+
+  - id: ERR-004
+    target: RT1
+    bus: A
+    fault: CORRUPT_SYNC
+    word_index: 0
+    expected_detection: SYNC
+    hlr: HLR-1553-ERR-001
+    llr: LLR-1553-WORD-008
+    test_id: TC-ERR-004
+
+  - id: ERR-005
+    target: RT2
+    fault: STATUS_BIT_INJECT
+    bit: BUSY
+    expected_detection: STATUS_BUSY
+    hlr: HLR-1553-ERR-002
+    llr: LLR-1553-ERR-002
+    test_id: TC-ERR-005
+
+  - id: ERR-006
+    target: RT2
+    fault: STATUS_BIT_INJECT
+    bit: ME
+    expected_detection: STATUS_ME
+    hlr: HLR-1553-ERR-002
+    llr: LLR-1553-ERR-002
+    test_id: TC-ERR-006
+
+  - id: ERR-007
+    target: RT2
+    fault: WRONG_WORD_COUNT
+    word_index: 1
+    expected_detection: WORD_COUNT_MISMATCH
+    hlr: HLR-1553-ERR-002
+    llr: LLR-1553-ERR-003
+    test_id: TC-ERR-007
+
+  - id: ERR-008
+    target: RT1
+    fault: ILLEGAL_COMMAND
+    expected_detection: STATUS_ME
+    hlr: HLR-1553-RT-007
+    llr: LLR-1553-RT-011
+    test_id: TC-ERR-008
+
+  - id: ERR-009
+    target: RT1
+    fault: BUS_A_FAIL
+    expected_detection: NO_RESPONSE
+    expected_recovery: BUS_FAILOVER
+    hlr: HLR-1553-REDUN-001
+    llr: LLR-1553-REDUN-002
+    test_id: TC-ERR-009
+
+  - id: ERR-010
+    target: RT1
+    fault: BUS_B_FAIL     # negative control: BC never uses bus B here
+    expected_detection: NONE
+    hlr: HLR-1553-REDUN-001
+    llr: LLR-1553-BUS-001
+    test_id: TC-ERR-010
