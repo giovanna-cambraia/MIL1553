@@ -401,3 +401,504 @@ static void add_rt_to_rt(void)
     mil1553_bc_schedule_entry_t *e = add_entry(MIL1553_MSG_RT_TO_RT, 1U, 1U, 2U, 0U);
     e->rt_address_2 = 2U; e->subaddress_2 = 2U;
 }
+
+void test_llr_1553_bc_005_rt_to_rt_sends_receive_command_then_transmit_command_back_to_back(void)
+{
+    sw_t w[8]; unsigned n; mil1553_command_fields_t c1, c2;
+    add_rt_to_rt();
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    n = spy(MIL1553_CHANNEL_A, w, 8U);
+    TEST_ASSERT_EQUAL_UINT(2U, n);
+    c1 = as_cmd(&w[0]); c2 = as_cmd(&w[1]);
+    TEST_ASSERT_EQUAL_UINT8(1U, c1.rt_address); TEST_ASSERT_EQUAL_UINT8(MIL1553_TR_RECEIVE, c1.tr_bit);
+    TEST_ASSERT_EQUAL_UINT8(2U, c2.rt_address); TEST_ASSERT_EQUAL_UINT8(MIL1553_TR_TRANSMIT, c2.tr_bit);
+    TEST_ASSERT_EQUAL_UINT8(1U, c1.subaddress); TEST_ASSERT_EQUAL_UINT8(2U, c2.subaddress);
+    TEST_ASSERT_EQUAL_UINT8(c1.word_count_field, c2.word_count_field);
+    TEST_ASSERT_EQUAL_UINT64(MIL1553_WORD_TIME_US, w[1].ts - w[0].ts); // no gap between the two
+}
+
+void test_llr_1553_bc_005_both_status_valid_completes(void)
+{
+    add_rt_to_rt();
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    reply_status(MIL1553_CHANNEL_A, 2U, false, false, false, false); // transmitting RT first
+    reply_data(MIL1553_CHANNEL_A, 2U);
+    reply_status(MIL1553_CHANNEL_A, 1U, false, false, false, false) // then the receiving RT
+    step(8U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+    TEST_ASSERT_EQUAL_UINT(0U, bc.error_log_count);
+}
+
+void test_llr_1553_bc_005_wrong_receiving_rt_status_is_an_error(void)
+{
+    add_rt_to_rt();
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    reply_status(MIL1553_CHANNEL_A, 2U, false, false, false, false);
+    reply_data(MIL1553_CHANNEL_A, 2U);
+    reply_status(MIL1533_CHANNEL_A, 9U, false, false, false, false); // not RT1
+    step(8U);
+    TEST_ASSERT_EQUAL_UINT(1U, count_errors(MIL1553_ERR_STATUS_ADDRESS_MISMATCH));
+}
+
+void test_llr_1553_bc_005_missing_receiving_rt_status_is_no_response(void)
+{
+    add_rt_to_rt();
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    reply_status(MIL1553_CHANNEL_A, 2U, false, false, false, false);
+    reply_data(MIL1553_CHANNEL_A, 2U);
+    step(40U);
+    TEST_ASSERT_TRUE(count_errors(MIL1553_ERR_NO_RESPONSE) >= 1U);
+}
+
+// LLR-1553-BC-006
+static mil1553_bc_schedule_entry_t *add_mode(uint8_t code, bool has_data, bool from_bc)
+{
+    mil1553_bc_schedule_entry_t *e = add_entry(MIL1553_MSG_CODE_MODE, 5U, 0U, 0U, 0U);
+    e->mode_code = code; e->has_data_word = has_data; e->mode_data_from_bc = from_bc;
+    return e;
+}
+
+void test_llr_1553_bc_006_mode_command_without_data_is_a_single_word(void)
+{
+    sw_t w[4]; unsigned n; mil1553_command_fields_t c;
+    (void)add_mode(2U, false, false);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    n = spy(MIL1553_CHANNEL_A, w, 4U);
+    TEST_ASSERT_EQUAL_UINT(1U, n);
+    c = as_cmd(&w[0]);
+    TEST_ASSERT_EQUAL_UINT8(0U, c.subaddress); // mode indicator
+    TEST_ASSERT_EQUAL_UINT8(2U, c.word_count_field); // the mode code
+}
+
+void test_llr_1553_bc_006_mode_command_with_data_from_bc_sends_one_data_word(void)
+{
+    sw_t w[4]; unsigned n;
+    (void)add_mode(17U, true, true);
+    start_bc()
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    n = spy(MIL1553_CHANNEL_A, w, 4U);
+    TEST_ASSERT_EQUAL_UINT(2U, n);
+    TEST_ASSERT_EQUAL_UINT8(MIL1553_TR_RECEIVE, as_cmd(&w[0]).tr_bit);
+    TEST_ASSERT_EQUAL(MIL1553_SYNC_DATA, w[1].sync);
+}
+
+void test_llr_1553_bc_006_mode_command_with_data_from_rt_waits_for_status_and_one_word(void)
+{
+    sw_t w[4]; unsigned n;
+    (void)add_mode(19U, true, false);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    n = spy(MIL1553_CHANNEL_A, w, 4U);
+    TEST_ASSERT_EQUAL_UINT(1U, n); // BC sends no data word
+    TEST_ASSERT_EQUAL_UINT8(MIL1553_TR_TRANSMIT, as_cmd(&w[0]).tr_bit);
+    reply_status(MIL1553_CHANNEL_A, 5U, false, false, false, false);
+    step(2U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_WAIT_RESPONSE, bc_get_state(&bc)); // still owes the data word
+    reply_data(MIL1553_CHANNEL_A, 1U);
+    step(2U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+}
+
+void test_llr_1553_bc_006_unlisted_or_inconsistent_mode_codes_are_rejected(void)
+{
+    const uint8_t unlisted[] = { 0U, 9U, 15U, 20U, 31U };
+    unsigned i;
+
+    for (i = 0U; i < sizeof(unlisted); i++)
+    {
+        setUp();
+        (void)add_mode(unlisted[i], false, false);
+        TEST_ASSERT_FALSE(bc_validate_schedule(&sched));
+    }
+    setUp(); (void)add_mode(32U, false, false); TEST_ASSERT_FALSE(bc_validate_schedule(&sched)); // out of range
+    setUp(); (void)add_mode(1U, true, true); TEST_ASSERT_FALSE(bc_validate_schedule(&sched)); // table says no data
+    setUp(); (void)add_mode(17U, false, false); TEST_ASSERT_FALSE(bc_validate_schedule(&sched)); // table says data
+    setUp(); (void)add_mode(17U, true, false); TEST_ASSERT_FALSE(bc_validate_schedule(&sched)); // wrong direction
+    setUp(); (void)add_mode(19U, true, true); TEST_ASSERT_FALSE(bc_validate_schedule(&sched)); // wrong direction 
+}
+
+void test_llr_1553_bc_006_every_listed_mode_code_is_accepted_with_its_table(void)
+{
+    const uint8_t no_data[] = { 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U };
+    unsigned i;
+    for (i = 0U; i < sizeof(no_data); i++) { setUp(); (void)add_mode(no_data[i], false, false); TEST_ASSERT_TRUE(bc_validate_schedule(&sched)); }
+    setUp(); (void)add_mode(16U, true, false); TEST_ASSERT_TRUE(bc_validate_schedule(&sched));
+    setUp(); (void)add_mode(17U, true, true); TEST_ASSERT_TRUE(bc_validate_schedule(&sched));
+    setUp(); (void)add_mode(18U, true, false); TEST_ASSERT_TRUE(bc_validate_schedule(&sched));
+    setUp(); (void)add_mode(19U, true, false); TEST_ASSERT_TRUE(bc_validate_schedule(&sched));
+}
+
+// LLR-1553-BC-007
+void_test_llr_1553_bc_007_broadcast_sends_command_and_data_and_waits_for_nothing(void)
+{
+    sw_t w[8]; unsigned n; mil1553_command_fields_t c;
+    (void)add_entry(MIL1553_MSG_BROADCAST, 31U, 4U, 2U, 0U);
+    start_bc();
+    step(60U);
+    n = spy(MIL1553_CHANNEL_A, w, 8U);
+    TEST_ASSERT_EQUAL_UINT(3U, n); // command + 2 data, nothing else
+    c = as_cmd(&w[0]);
+    TEST_ASSERT_EQUAL_UINT8(31U, c.rt_address);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+    TEST_ASSERT_EQUAL_UINT(0U, bc.error_log_count); // no false no-response 
+}
+
+void test_llr_1553_bc_007_broadcast_never_enters_wait_response(void)
+{
+    unsigned i;
+    (void)add_entry(MIL1553_MSG_BROADCAST, 31U, 4U, 1U, 0U);
+    start_bc();
+    for (i = 0U; i < 100U; i++)
+    {
+        step(1U);
+        TEST_ASSERT_NOT_EQUAL(MIL1553_BC_STATE_WAIT_RESPONSE, bc_get_state(&bc));
+    }
+}
+
+// LLR-1553-BC-008
+void test_llr_1553_bc_008_next_command_waits_four_us_after_the_previous_message_ends(void)
+{
+    sw_t w[16]; unsigned n, i; mil1553_time_us_t status_end = 0U, second_cmd = 0U; bool seen_first = false;
+
+    (void)add_entry(MIL1553_MSG_BC_TO_RT, 5U, 1U, 2U, 0U);
+    (void)add_entry(MIL1553_MSG_BC_TO_RT, 6U, 1U, 2U, 96U);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    bus_model_advance_us(&bus, 30U);
+    reply_status(MIL1553_CHANNEL_A, 5U, false, false, false, false);
+    step(40U);
+
+    n = spy(MIL1553_CHANNEL_A, w, 16U);
+    for (i = 0U; i < n; i++)
+    {
+        if (w[i].sender == MIL1553_TERMINAL_RT2) { status_end = w[i].ts + MIL1553_WORD_TIME_US; }
+        if ((w[i].sender == MIL1553_TERMINAL_BC) && (w[i].sync == MIL1553_SYNC_COMMAND_STATUS))
+        {
+            if (seen_first) { second_cmd = w[i].ts; break;}
+            seen_first = true;
+        }
+    }
+    TEST_ASSERT_TRUE(second_cmd != 0U);
+    TEST_ASSERT_EQUAL_UINT64(status_end + MIL1553_T_GAP_MIN_US, second_cmd);
+}
+
+void test_llr_1553_bc_008_the_retry_after_a_timeout_respects_the_gap(void)
+{
+    sw_t a[8], b[8]; unsigned na, nb;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    step(60U);
+    na = spy(MIL1553_CHANNEL_A, a, 8U);
+    nb = spy(MIL1533_CHANNEL_B, b, 8U);
+    TEST_ASSERT_TRUE((na >= 1U) && (nb >= 1U));
+    // timeout expires T_NORESPT after the first command's last word; the retry waits the gap after that
+    TEST_ASSERT_TRUE(b[0].ts >= (a[0].ts + MIL1553_WORD_TIME_US + MIL1553_T_NORESP_US + MIL1553_T_GAP_MIN_US));
+}
+
+// LLR-1553-BC-009
+static mil1553_time_us_t wait_start(void) { return bc.message_start_time_us; }
+
+void test_llr_1553_bc_009_no_response_is_declared_at_fourteen_us_not_before(void)
+{
+    mil1553_time_us_t t0, detect = 0U;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    t0 = wait_start();
+    while (bc_get_state(&bc) == MIL1553_BC_STATE_WAIT_RESPONSE)
+    {
+        detect = bus_model_now_us;
+        step(1U);
+    }
+    TEST_ASSERT_EQUAL_UINT64(MIL1553_T_NORESP_US, detect - t0);
+    TEST_ASSERT_EQUAL_UINT(1U, count_errors(MIL1553_ERR_NO_RESPONSE));
+}
+
+void test_llr_1553_bc_009_status_at_twelve_and_thirteen_us_is_accepted(void)
+{
+    const unsigned delays[2] = { 12U, 13U };
+    unsigned i;
+    for (i = 0U; i < 2U; i++)
+    {
+        setUp();
+        (void)add_entry(MIL1553_MSG_BC_TO_RT, 5U, 1U, 1U, 0U);
+        start_bc();
+        TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+        bus_model_advance_us(&bus, delays[i]);
+        reply_status(MIL1553_CHANNEL_A, 5U, false, false, false, false);
+        step(2U);
+        TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+        TEST_ASSERT_EQUAL_UINT(0U, count_errors(MIL1553_ERR_NO_RESPONSE));
+    }
+}
+
+void test_llr_1553_bc_009_timeout_restarts_after_each_received_word(void)
+{
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 3U, 0U);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    reply_status(MIL1553_CHANNEL_A, 5U, false, false, false, false);
+    step(1U);
+    bus_model_advance_us(&bus, 10U); // 10 us of silence: inside the window
+    reply_data(MIL1533_CHANNEL_A, 1U);
+    step(1U);
+    bus_model_advance_us(&bus, 10U);
+    reply_data(MIL1553_CHANNEL_A, 2U);
+    step(8U);
+    TEST_ASSERT_EQUAL_UINT(0U, bc.error_log_count);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+}
+
+// LLR-1553-BC-010
+void test_llr_1553_bc_010_idle_major_minor_wait_minor_path(void)
+{
+    (void)add_entry(MIL1553_MSG_BC_TO_RT, 5U, 1U, 1U, 0U);
+    TEST_ASSERT_TRUE(bc_init(&bc, &sched, &bus, MIL1553_CHANNEL_A, 3U));
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc));
+    TEST_ASSERT_TRUE(bc_start(&bc));
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MAJOR_FRAME, bc_get_state(&bc));
+    step(1U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+    step(1U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_WAIT_RESPONSE, bc_get_state(&bc));
+    reply_status(MIL1553_CHANNEL_A, 5U, false, false, false, false);
+    step(1U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc));
+}
+
+void test_llr_1553_bc_010_last_minor_frame_returns_to_major_frame(void)
+{
+    sched.minor_frame_period_us = 200U;
+    (void)add_entry(MIL1553_MSG_BROADCAST, 31U, 1U, 1U, 0U);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_MAJOR_FRAME, 1U)); // initial state after start 
+    step(2U)
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_MAJOR_FRAME, 400U)); // wraps after the period
+}
+
+void test_llr_1553_bc_010_timeout_failover_retry_wait_timeout_minor_path(void)
+{
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_WAIT_RESPONSE, 10U));
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_TIMEOUT, 40U));
+    step(1U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_FAILOVER, bc_get_state(&bc));
+    step(1U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_WAIT_RESPONSE, bc_get_state(&bc)); // retry
+    TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_TIMEOUT, 40U));
+    step(1U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MINOR_FRAME, bc_get_state(&bc)); // retry used: give up on this RT
+}
+
+void test_llr_1553_bc_010_stop_returns_to_idle_from_every_state(void)
+{
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    bc_stop(&bc); TEST_ASSERT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc)); // from MAJOR_FRAME
+    TEST_ASSERT_TRUE(bc_start(&bc)); step(1U);
+    bc_stop(&bc); TEST_ASSERT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc)); // from MINOR_FRAME
+    TEST_ASSERT_TRUE(bc_start(&bc)); step(2U);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_WAIT_RESPONSE, bc_get_state(&bc));
+    bc_stop(&bc); TEST_ASSERT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc)); // from WAIT_RESPONSE
+    TEST_ASSERT_TRUE(bc_start(&bc)); TEST_ASSERT_TRUE(step_until(MIL1553_BC_STATE_TIMEOUT, 80U));
+    bc_stop(&bc); TEST_ASSERT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc)); // from TIMEOUT
+}
+
+void test_llr_1553_bc_010_run_frame_in_idle_does_nothing_and_reports_false(void)
+{
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    TEST_ASSERT_TRUE(bc_init(&bc, &sched, &bus, MIL1553_CHANNEL_A, 3U));
+    TEST_ASSERT_FALSE(bc_run_frame(&bc));
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc));
+}
+
+void test_llr_1553_bc_010_start_outside_idle_is_ignored_and_counted(void)
+{
+    mil1553_bc_health_t h;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    TEST_ASSERT_FALSE(bc_start(&bc));
+    TEST_ASSERT_FALSE(bc_start(&bc));
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_EQUAL_UINT32(2U, h.ignored_events);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_MAJOR_FRAME, bc_get_state(&bc));
+}
+
+void test_llr_1553_bc_010_unsolicited_words_are_ignored_and_counted(void)
+{
+    mil1553_symbols_t s; mil1553_bc_health_t h;
+    (void)add_entry(MIL1553_MSG_BC_TO_RT, 5U, 1U, 1U, 0U);
+    start_bc();
+    ts_data(s, 1U);
+    (void)ts_tx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT2, s);
+    (void)ts_tx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_RT2, s);
+    step(3U); // the BC issues its message and discards the strays first
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_EQUAL_UINT32(2U, h.ignore_events);
+    TEST_ASSERT_EQUAL(MIL1553_BC_STATE_WAIT_RESPONSE, bc_get_state(&bc));
+}
+
+// LLR-1553-REDUN-001
+void test_llr_001_a_failed_message_is_retried_once_on_the_other_bus(void)
+{
+    sw_t a[40], b[40]; unsigned na, nb;
+    (void)add_entry(MIL1553_MSG_BC_TO_RT, 5U, 1U, 2U, 0U);
+    start_bc();
+    step(120U);
+    na = spy(MIL1553_CHANNEL_A, a, 40U);
+    nb = spy(MIL1553_CHANNEL_B, b, 40U); 
+    TEST_ASSERT_EQUAL_UINT(3U, na); // cmd + data, once 
+    TEST_ASSERT_EQUAL_UINT(3U, nb); // the same message, once, on B
+    TEST_ASSERT_EQUAL_HEX16(a[0].field, b[0].field); // identical command word
+}
+
+void test_llr_1553_redun_001_no_retry_when_the_other_bus_is_failed(void)
+{
+    sw_t b[8];
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    bus_model_set_channel_failed(&bus, MIL1553_CHANNEL_B, true);
+    start_bc();
+    step(60U);
+    TEST_ASSERT_EQUAL_UINT(0U, spy(MIL1553_CHANNEL_B, b, 8U));
+    TEST_ASSERT_EQUAL_UINT(1U, count_errors(MIL1553_ERR_NO_RESPONSE));
+}
+
+void test_llr_1553_redun_001_retry_result_becomes_the_message_result(void)
+{
+    mil1553_bc_health_t h;
+    (void)add_entry(MIL1553_MSG_BC_TO_RT, 5U, 1U, 1U, 0U);
+    auto_b = true; // answers only on bus B
+    start_bc();
+    step(120U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_FALSE(h.rt_failed[5]); // the retry succeeded: RT not failed
+    TEST_ASSERT_EQUAL_UINT(1U, count_errors(MIL1553_ERR_NO_RESPONSE));
+}
+
+void test_llr_1553_redun_001_no_third_attempt_after_a_failed_retry(void)
+{
+    sw_t a[40], b[40]; unsigned na, nb;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    step(150U); // well past both timeouts, still in major frame 0 
+    na = spy(MIL1553_CHANNEL_A, a, 40U);
+    nb = spy(MIL1553_CHANNEL_B, b, 40U);
+    TEST_ASSERT_EQUAL_UINT(1U, na);
+    TEST_ASSERT_EQUAL_UINT(1U, nb);
+}
+
+// LLR-1553-REDUN-002
+static void run_frames_with_a_dead_bus_a(unsigned frames)
+{
+    unsigned i;
+    sched.minor_frame_period_us = 200U;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    auto_a = false; auto_b = true; // A is dead, B works 
+    start_bc();
+    for (i = 0U; i < frames; i++) { step(200U); }
+}
+
+void test_llr_1553_redun_002_primary_bus_switches_when_the_threshold_is_reached(void)
+{
+    mil1553_bc_health_t h;
+
+    run_frames_with_a_dead_bus_a(2U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_EQUAL(MIL1553_CHANNEL_A, h.primary_bus); // threshold - 1 failures: not yet
+    TEST_ASSERT_FALSE(h.degraded);
+    step(200U); // the third failed message 
+    step(40U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_EQUAL(MIL1553_CHANNEL_B, h.primary_bus);
+    TEST_ASSERT_TRUE(h.degraded);
+    TEST_ASSERT_EQUAL_UINT8(0U, bc.consecutive_fail_count[0]); // counters reset on the switch 
+    TEST_ASSERT_EQUAL_UINT8(0U, bc.consecutive_fail_count[1]);
+}
+
+void test_llr_1553_redun_002_degraded_indication_stays_after_the_bc_resumes(void)
+{
+    mil1553_bc_health_t h;
+    run_frames_with_a_dead_bus_a(5U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_TRUE(h.degraded);
+    TEST_ASSERT_NOT_EQUAL(MIL1553_BC_STATE_IDLE, bc_get_state(&bc));
+}
+
+void test_llr_1553_redun_002_a_success_on_a_bus_resets_that_buses_counter(void)
+{
+    unsigned i;
+    sched.minor_frame_period_us = 200U;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    auto_a = false; auto_b = true;
+    start_bc();
+    step(200U); // fail on A (A=1), succeed on B 
+    TEST_ASSERT_EQUAL_UINT8(1U, bc.consecutive_fail_count[0]);
+    auto_a = true;
+    step(200U); // succeeds on A: A resets 
+    TEST_ASSERT_EQUAL_UINT8(0U, bc.consecutive_fail_count[0]);
+    for (i = 0U; i < 4U; i++)
+    {
+        auto_a = (i % 2U) == 0U; step(200U); // alternate ok / fail: never 3 in a row
+    }
+    TEST_ASSERT_EQUAL(MIL1553_CHANNEL_A, bc.primary_bus);
+}
+
+void test_llr_1553_redun_002_custom_threshold_is_honoured(void)
+{
+    unsigned i;
+    sched.minor_frame_period_us = 200U;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    auto_a = false; auto_b = true;
+    TEST_ASSERT_TRUE(bc_init(&bc, &sched, &bus, MIL1553_CHANNEL_A, 2U));
+    TEST_ASSERT_TRUE(bc_start(&bc));
+    for (i = 0U; i < 2U; i++) { step(200U); }
+    step(40U);
+    TEST_ASSERT_EQUAL(MIL1553_CHANNEL_B, bc.primary_bus);
+}
+
+// LLR-1553-REDUN-003
+
+void test_llr_1553_redun_003_failed_rt_is_flagged_and_its_other_messages_are_skipped(void)
+{
+    sw_t a[48], b[48]; unsigned na, nb, i; unsigned rt5_cmds = 0U, rt6_cmds = 0U;
+    mil1553_bc_health_t h;
+
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 200U);     // same RT: must be skipped 
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 6U, 1U, 1U, 400U);     // different RT: still issued 
+    auto_a = false; auto_b = false;
+    start_bc();
+    step(120U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_TRUE(h.rt_failed[5]);
+    TEST_ASSERT_FALSE(h.rt_failed[6]);
+
+    step(500U); // through the rest of this major frame 
+    na = spy(MIL1553_CHANNEL_A, a, 48U);
+    nb = spy(MIL1553_CHANNEL_B, b, 48U);
+    for (i = 0U; i < na; i++) { if (a[i].sender == MIL1553_TERMINAL_BC) { (as_cmd(&a[i]).rt_address == 5U) ? rt5_cmds++ : rt6_cmds++; } }
+    for (i = 0U; i < nb; i++) { if (b[i].sender == MIL1553_TERMINAL_BC) { (as_cmd(&b[i]).rt_address == 5U) ? rt5_cmds++ : rt6_cmds++; } }
+    TEST_ASSERT_EQUAL_UINT(2U, rt5_cmds); // first message + its one retry, nothing more 
+    TEST_ASSERT_TRUE(rt6_cmds >= 1U);
+}
+
+void test_llr_1553_redun_003_flags_clear_at_the_next_major_frame(void)
+{
+    mil1553_bc_health_t h;
+    sched.minor_frame_period_us = 300U;
+    (void)add_entry(MIL1553_MSG_RT_TO_BC, 5U, 1U, 1U, 0U);
+    start_bc();
+    step(120U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_TRUE(h.rt_failed[5]);
+    step(300U); // into the next major frame 
+    step(5U);
+    bc_get_health(&bc, &h);
+    TEST_ASSERT_FALSE(h.rt_failed[5]);
+}
