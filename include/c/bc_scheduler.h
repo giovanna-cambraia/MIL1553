@@ -68,6 +68,7 @@ typedef struct {
     bool degraded;
     mil1553_channel_t primary_bus;
     bool rt_failed[MIL1553_RT_ADDR_MAX + 1U];
+    uint32_t ignored_events; // LLR-1553-BC-010
 } mil1553_bc_health_t;
 
 typedef struct {
@@ -105,6 +106,10 @@ typedef struct {
     uint8_t response_data_words_received;
 
     bool degraded_indication; // sticky until bc_init; set on bus switch
+    bool overrun_logged; // MINOR_FRAME_OVERRUN already raised for this minor frame
+    bool message_ever_sent; // false until the first command goes out (gap rule)
+    uint32_t ignored_event_count; // LLR-1553-BC-010: events ignored in the current state
+
     bool rt_failed_this_major_frame[MIL1553_RT_ADDR_MAX + 1U]; // LLR-1553-REDUN-003
 
     mil1553_error_record_t error_log[MIL1553_ERROR_LOG_CAPACITY]; // LLR-1553-ERR-004
@@ -172,4 +177,4 @@ void bc_get_health(const mil1553_bc_context_t *ctx, mil1553_bc_health_t *out_hea
 }
 #endif
 
-#endif
+#endif 

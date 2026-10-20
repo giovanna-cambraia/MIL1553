@@ -121,7 +121,36 @@ uint32_t bc_message_duration_us(const mil1553_bc_schedule_entry_t *entry)
     return duration;
 }
 
-// implements: LLR-1553-BC-001
+// mode codes this BC may schedule, per design/mode_code_table.md (LLR-1553-BC-006); kept as the BC's own
+// copy, deliberately not shared with rt_service (SDD 1: no shared source); both are checked against the
+// document at design baseline
+typedef struct {
+    bool supported;
+    bool has_data_word;
+    bool data_from_bc; // true: BC supplies the data word; false: RT returns it
+} bc_mode_entry_t;
+
+static const bc_mode_entry_t BC_MODE_TABLE[32] = {
+    /*  0 */ { false, false, false }, // Dynamic Bus Control: recognized, unsupported
+    /*  1 */ { true,  false, false }, /*  2 */ { true,  false, false },
+    /*  3 */ { true,  false, false }, /*  4 */ { true,  false, false },
+    /*  5 */ { true,  false, false }, /*  6 */ { true,  false, false },
+    /*  7 */ { true,  false, false }, /*  8 */ { true,  false, false },
+    /*  9 */ { false, false, false }, /* 10 */ { false, false, false },
+    /* 11 */ { false, false, false }, /* 12 */ { false, false, false },
+    /* 13 */ { false, false, false }, /* 14 */ { false, false, false },
+    /* 15 */ { false, false, false },
+    /* 16 */ { true,  true,  false }, /* 17 */ { true,  true,  true  },
+    /* 18 */ { true,  true,  false }, /* 19 */ { true,  true,  false },
+    /* 20 */ { false, false, false }, /* 21 */ { false, false, false },
+    /* 22 */ { false, false, false }, /* 23 */ { false, false, false },
+    /* 24 */ { false, false, false }, /* 25 */ { false, false, false },
+    /* 26 */ { false, false, false }, /* 27 */ { false, false, false },
+    /* 28 */ { false, false, false }, /* 29 */ { false, false, false },
+    /* 30 */ { false, false, false }, /* 31 */ { false, false, false }
+};
+
+// implements: LLR-1553-BC-001, LLR-1553-BC-006
 bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
 {
     uint8_t i;
@@ -150,6 +179,24 @@ bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
         if ((e->msg_type == MIL1553_MSG_RT_TO_RT) && (e->rt_address_2 > MIL1553_RT_ADDR_MAX))
         {
             return false;
+        }
+
+        if (e->msg_type == MIL1553_MSG_MODE_CODE)
+        {
+            // implements: LLR-1553-BC-006: reject an unlisted mode code, or a data-word presence/direction
+            // that disagrees with the table
+            const bc_mode_entry_t *m;
+
+            if (e->mode_code > 31U)
+            {
+                return false;
+            }
+            m = &BC_MODE_TABLE[e->mode_code];
+            if ((!m->supported) || (e->has_data_word != m->has_data_word) ||
+                (m->has_data_word && (e->mode_data_from_bc != m->data_from_bc)))
+            {
+                return false;
+            }
         }
 
         if ((e->msg_type == MIL1553_MSG_BC_TO_RT) || (e->msg_type == MIL1553_MSG_RT_TO_BC) ||
@@ -243,6 +290,9 @@ bool bc_init(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_t *schedule,
     ctx->response_data_words_received = 0U;
 
     ctx->degraded_indication = false;
+    ctx->overrun_logged = false;
+    ctx->message_ever_sent = false;
+    ctx->ignored_event_count = 0U;
 
     for (i = 0U; i <= MIL1553_RT_ADDR_MAX; i++)
     {
@@ -260,6 +310,7 @@ bool bc_start(mil1553_bc_context_t *ctx)
 {
     if (ctx->state != MIL1553_BC_STATE_IDLE)
     {
+        ctx->ignored_event_count++; // start request outside IDLE: ignored and counted, LLR-1553-BC-010
         return false;
     }
 
@@ -454,6 +505,7 @@ static void bc_discard_stale_words(mil1553_bc_context_t *ctx)
         {
             break;
         }
+        ctx->ignored_event_count++; // unsolicited word ignored and counted, LLR-1553-BC-010
     }
     for (n = 0U; n < BUS_MODEL_QUEUE_CAPACITY; n++)
     {
@@ -461,6 +513,7 @@ static void bc_discard_stale_words(mil1553_bc_context_t *ctx)
         {
             break;
         }
+        ctx->ignored_event_count++; // unsolicited word ignored and counted, LLR-1553-BC-010
     }
 }
 
@@ -497,7 +550,7 @@ static void bc_issue_message(mil1553_bc_context_t *ctx, const mil1553_bc_schedul
 
 // redundancy handling, LLR-1553-REDUN-001 .. 003
 
-/* 
+/*
     implements: LLR-1553-REDUN-003
 
     for RT-to-RT the stage at which the response stalled identifies the culprit: stage 2 means the transmitting RT
@@ -539,6 +592,20 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
         bit_cbit_watchdog_kick(ctx->cbit, bc_now(ctx));
     }
 
+    // implements: LLR-1553-BC-002; a message still in flight when its minor frame's period has elapsed means the
+    // frame overran; raised once per minor frame
+    if (((ctx->state == MIL1553_BC_STATE_WAIT_RESPONSE) ||
+         (ctx->state == MIL1553_BC_STATE_TIMEOUT) ||
+         (ctx->state == MIL1553_BC_STATE_FAILOVER)) &&
+        (!ctx->overrun_logged) &&
+        ((mil1553_time_us_t)(bc_now(ctx) - ctx->minor_frame_start_time_us) >=
+         (mil1553_time_us_t)ctx->schedule.minor_frame_period_us))
+    {
+        bc_log_error(ctx, ctx->primary_bus, MIL1553_ERR_MINOR_FRAME_OVERRUN,
+                     (uint32_t)ctx->current_entry_snapshot_index);
+        ctx->overrun_logged = true;
+    }
+
     switch (ctx->state)
     {
     case MIL1553_BC_STATE_MAJOR_FRAME:
@@ -554,6 +621,7 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
             ctx->rt_failed_this_major_frame[i] = false; // LLR-1553-REDUN-003
         }
         ctx->current_minor_frame = 0U;
+        ctx->overrun_logged = false;
         ctx->minor_frame_start_time_us = bc_now(ctx);
         ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
         break;
@@ -586,7 +654,18 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
                 ctx->current_message_bus = ctx->primary_bus;
                 ctx->retry_used_for_current_message = false;
 
+                // implements: LLR-1553-BC-008: no command word earlier than T_GAP_MIN_US after the end of the
+                // previous message (or after its no-response timeout expiry, which is what last_activity_end_us
+                // holds after a timeout); the BC idles the gap out
+                if (ctx->message_ever_sent &&
+                    (bc_now(ctx) < (mil1553_time_us_t)(ctx->last_activity_end_us + MIL1553_T_GAP_MIN_US)))
+                {
+                    bus_model_advance_us(ctx->bus,
+                        (mil1553_time_us_t)((ctx->last_activity_end_us + MIL1553_T_GAP_MIN_US) - bc_now(ctx)));
+                }
+
                 bc_issue_message(ctx, e, ctx->current_message_bus);
+                ctx->message_ever_sent = true;
                 ctx->message_start_time_us = bc_now(ctx);
                 ctx->last_activity_end_us = ctx->message_start_time_us;
 
@@ -608,20 +687,9 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
         {
             if (elapsed >= (mil1553_time_us_t)ctx->schedule.minor_frame_period_us)
             {
-                // check overrun: an entry for this minor frame was never issued (RT-down skips do not count as overrun -
-                // LLR-1553-BC-002 concerns schedule timing, not RT availability)
-                uint8_t k;
-                for (k = 0U; k < ctx->schedule.entry_count; k++)
-                {
-                    const mil1553_bc_schedule_entry_t *e2 = &ctx->schedule.entries[k];
-                    bool rt_is_down2 = ((e2->rt_address <= MIL1553_RT_ADDR_MAX) && ctx->rt_failed_this_major_frame[e2->rt_address]);
-
-                    if ((e2->minor_frame_index == ctx->current_minor_frame) && (!ctx->entry_issued[k]) && (!rt_is_down2))
-                    {
-                        bc_log_error(ctx, ctx->primary_bus, MIL1553_ERR_MINOR_FRAME_OVERRUN, (uint32_t)k);
-                    }
-                }
-
+                // every eligible entry has been issued and the period has elapsed: advance; a frame that ran late
+                // is detected while the message is still in flight, at the top of bc_run_frame (LLR-1553-BC-002)
+                ctx->overrun_logged = false;
                 ctx->current_minor_frame++;
                 if (ctx->current_minor_frame >= ctx->schedule.minor_frame_count)
                 {
@@ -777,6 +845,8 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
                     bc_log_error(ctx, ctx->current_message_bus,
                                  short_data ? MIL1553_ERR_WORD_COUNT_MISMATCH : MIL1553_ERR_NO_RESPONSE,
                                  (uint32_t)ctx->current_entry_snapshot_index);
+                    // the gap (LLR-1553-BC-008) runs from the timeout expiry
+                    ctx->last_activity_end_us = (mil1553_time_us_t)(ctx->last_activity_end_us + MIL1553_T_NORESP_US);
                     ctx->state = MIL1553_BC_STATE_TIMEOUT;
                 }
                 // else: still within the response window, keep waiting 
@@ -855,6 +925,7 @@ void bc_get_health(const mil1553_bc_context_t *ctx, mil1553_bc_health_t *out_hea
  
     out_health->degraded = ctx->degraded_indication;
     out_health->primary_bus = ctx->primary_bus;
+    out_health->ignored_events = ctx->ignored_event_count;
  
     for (i = 0U; i <= MIL1553_RT_ADDR_MAX; i++)
     {
