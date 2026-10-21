@@ -16,7 +16,7 @@ PYTHON  ?= python3
 ROOT    := ../..
 
 ifeq ($(OS),Windows_NT)
-EXE := .exe
+EXE := .exegit
 else
 EXE :=
 endif
