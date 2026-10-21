@@ -1,7 +1,7 @@
 /*
     project: MIL1553
 
-    realizes: LLR-1553-BIT-005, LLR-1553-BIT-006
+    realizes: LLR-1553-BIT-005, LLR-1553-BIT-006, LLR-1553-BIT-008
 */
 
 #include "bit_cbit.h"
@@ -16,7 +16,7 @@ void bit_cbit_init(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t watchdog_p
     uint8_t c;
     uint8_t i;
 
-    for (c = 0U; c > BUS_MODEL_CHANNEL_COUNT; c++)
+    for (c = 0U; c < BUS_MODEL_CHANNEL_COUNT; c++)
     {
         for (i = 0U; i < BIT_CBIT_WINDOW_SIZE; i++)
         {
@@ -32,7 +32,9 @@ void bit_cbit_init(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t watchdog_p
     ctx->response_time_violations = 0U;
     ctx->word_count_violations = 0U;
 
-    ctx->watchdog_period_us = (watchdog_period_us == 0U) ? (mil1553_time_us_t)BIT_CBIT_WATCHDOG_PERIOD_US_DEFAULT : watchdog_period_us;
+    ctx->watchdog_period_us = (watchdog_period_us == 0U) ? 
+                              (mil1553_time_us_t)BIT_CBIT_WATCHDOG_PERIOD_US_DEFAULT : 
+                              watchdog_period_us;
     ctx->watchdog_last_progress_us = 0U;
     ctx->watchdog_tripped = false;
 }
@@ -41,6 +43,7 @@ static void bit_cbit_record_outcome(mil1553_bit_cbit_channel_t *ch, bool good)
 {
     ch->outcomes[ch->next_index] = good;
     ch->next_index = (uint8_t)((ch->next_index + 1U) % BIT_CBIT_WINDOW_SIZE);
+
     if (ch->filled_count < BIT_CBIT_WINDOW_SIZE)
     {
         ch->filled_count++;
@@ -89,7 +92,8 @@ void bit_cbit_watchdog_kick(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t n
 void bit_cbit_tick(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t now_us)
 {
     uint8_t c;
-    mil1553_time_us_t since_progress = (mil1553_time_us_t)(now_us - ctx->watchdog_last_progress_us);
+    mil1553_time_us_t since_progress = (now_us >= ctx->watchdog_last_progress_us) ? 
+                                       (now_us - ctx->watchdog_last_progress_us) : 0U;
 
     if (since_progress > ctx->watchdog_period_us)
     {
@@ -102,19 +106,19 @@ void bit_cbit_tick(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t now_us)
 
         if (ch->filled_count > 0U)
         {
-            uint8_t errors_in_windows = 0U;
+            uint8_t errors_in_window = 0U;
             uint8_t i;
 
             for (i = 0U; i < ch->filled_count; i++)
             {
                 if (!ch->outcomes[i])
                 {
-                    errors_in_windows++;
+                    errors_in_window++;
                 }
             }
 
             {
-                uint32_t ratio_percent = ((uint32_t)errors_in_windows * 100U) / (uint32_t)ch->filled_count;
+                uint32_t ratio_percent = ((uint32_t)errors_in_window * 100U) / (uint32_t)ch->filled_count;
                 ch->unhealthy = (ratio_percent > (uint32_t)BIT_CBIT_ERROR_RATIO_THRESHOLD_PERCENT);
             }
         }
@@ -122,20 +126,38 @@ void bit_cbit_tick(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t now_us)
 }
 
 // implements: LLR-1553-BIT-005, LLR-1553-BIT-006, LLR-1553-BIT-008
-void bit_cbit_cbit_update_result(const mil1553_bit_cbit_context_t *ctx, mil1553_bit_result_t *result)
+void bit_cbit_update_result(const mil1553_bit_cbit_context_t *ctx, mil1553_bit_result_t *result)
 {
     bool any_unhealthy = ctx->channel[0].unhealthy || ctx->channel[1].unhealthy;
     bool degraded = any_unhealthy || ctx->watchdog_tripped;
-    bool overall_pass = (!degraded) && (ctx->response_time_violations == 0U) && (ctx->word_count_violations == 0U);
+    bool overall_pass = (!degraded) && 
+                        (ctx->response_time_violations == 0U) && 
+                        (ctx->word_count_violations == 0U);
 
     result->cbit.ever_run = true;
     result->cbit.last_passed = overall_pass;
-    result->cbit.failing_test_id - any_unhealthy ? BIT_CBIT_TEST_CHANNEL_HEALTH : ctx->watchdog_tripped ? BIT_CBIT_TEST_WATCHDOG : 
-                                   (ctx->response_time_violations > 0U) ? BIT_CBIT_TEST_PROTOCOL : (ctx->word_count_violations > 0U) ? 
-                                   BIT_CBIT_TEST_PROTOCOL : (ctx->word_count_violations > 0U) ? BIT_CBIT_TEST_PROTOCOL : BIT_CBIT_TEST_PARITY;
 
-    // implements: LLR-1553-BIT-009, CBIT only ever moves between OPERATIONAL and DEGRADED; it never clears a FAIL state set by PBIT/IBIT and never sets FAIL itself
-    // (that is reserved for a genuinely fatal PBIT/IBIT result per LLR-1553-BIT-004)
+    if (!overall_pass)
+    {
+        if (any_unhealthy)
+        {
+            result->cbit.failing_test_id = BIT_CBIT_TEST_CHANNEL_HEALTH;
+        }
+        else if (ctx->watchdog_tripped)
+        {
+            result->cbit.failing_test_id = BIT_CBIT_TEST_WATCHDOG;
+        }
+        else if ((ctx->response_time_violations > 0U) || (ctx->word_count_violations > 0U))
+        {
+            result->cbit.failing_test_id = BIT_CBIT_TEST_PROTOCOL;
+        }
+        else
+        {
+            result->cbit.failing_test_id = BIT_CBIT_TEST_PARITY;
+        }
+    }
+
+    // implements: LLR-1553-BIT-009
     if (result->state != MIL1553_BIT_STATE_FAIL)
     {
         result->state = degraded ? MIL1553_BIT_STATE_DEGRADED : MIL1553_BIT_STATE_OPERATIONAL;

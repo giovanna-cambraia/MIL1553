@@ -39,11 +39,13 @@ void bit_pbit_init(mil1553_bit_pbit_context_t *ctx)
         ctx->ram_test_region[i] = 0U;
     }
 
-    ctx->rom_reference_checksum = bit_pbit_checksum(BIT_PBIT_FROM_TEST_BLOCK, 32U);
+    ctx->rom_reference_checksum = bit_pbit_checksum(BIT_PBIT_ROM_TEST_BLOCK, 32U);
     ctx->rom_reference_captured = true;
 }
 
-// implements: LLR-1553-BIT-001 (RAM walking 1s/0s)
+// implements: LLR-1553-BIT-001
+// NOTE: the loops below write 0xFF / 0x00 to every cell and read it back, which is an all-ones / all-zeros stuck-bit test, not a walking-1s/0s
+// test as the LLR text names it, behaviour is retained as-is; see review note in the LLR-1553-BIT-001 baseline
 static bool bit_pbit_check_ram(mil1553_bit_pbit_context_t *ctx)
 {
     uint8_t saved[BIT_PBIT_RAM_TEST_REGION_SIZE];
@@ -55,7 +57,7 @@ static bool bit_pbit_check_ram(mil1553_bit_pbit_context_t *ctx)
         saved[i] = ctx->ram_test_region[i];
     }
 
-    // walking ones
+    // all ones
     for (i = 0U; i < BIT_PBIT_RAM_TEST_REGION_SIZE; i++)
     {
         ctx->ram_test_region[i] = 0xFFU;
@@ -65,7 +67,7 @@ static bool bit_pbit_check_ram(mil1553_bit_pbit_context_t *ctx)
         }
     }
 
-    // walking zeros
+    // all zeros
     for (i = 0U; i < BIT_PBIT_RAM_TEST_REGION_SIZE; i++)
     {
         ctx->ram_test_region[i] = 0x00U;
@@ -96,11 +98,11 @@ static bool bit_pbit_check_codec(void)
     mil1553_symbols_t symbols;
     bool ok = true;
 
-    // commnand word round trip
+    // command word round trip
     {
         mil1553_command_fields_t cmd_in;
         mil1553_command_fields_t cmd_out;
-        mil1553_command_fields_t decoded;
+        mil1553_decoded_word_t decoded;
 
         cmd_in.rt_address = 7U;
         cmd_in.tr_bit = MIL1553_TR_RECEIVE;
@@ -143,7 +145,7 @@ static bool bit_pbit_check_codec(void)
         st_in.busy = false;
         st_in.subsystem_flag = true;
         st_in.dbc_acceptance = false;
-        st_in.terminal_flag - false;
+        st_in.terminal_flag = false;
 
         if (!mil1553_word_pack_status(&st_in, symbols))
         {
@@ -182,7 +184,7 @@ static bool bit_pbit_check_codec(void)
     return ok;
 }
 
-// implemens: LLR-1553_BIT-001 (timer sanity, 1us tolerance)
+// implements: LLR-1553-BIT-001 (timer sanity, 1us tolerance)
 static bool bit_pbit_check_timer(mil1553_bus_model_context_t *bus)
 {
     mil1553_time_us_t before = bus_model_now_us(bus);

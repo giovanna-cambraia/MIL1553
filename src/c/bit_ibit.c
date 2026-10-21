@@ -13,7 +13,7 @@ static bool bit_ibit_loopback_channel(mil1553_bus_model_context_t *bus, mil1553_
 
     mil1553_word_pack_data(BIT_IBIT_PATTERN_VALUE, symbols);
 
-    if (!bus_model_transmit(bus, channel, symbls, terminal_id))
+    if (!bus_model_transmit(bus, channel, symbols, terminal_id))
     {
         return false; // channel failed, cannot even attempt loopback
     }
@@ -53,13 +53,13 @@ bool bit_ibit_run(mil1553_bit_result_t *result, mil1553_bus_model_context_t *bus
 
     ok_a = bit_ibit_loopback_channel(bus, MIL1553_CHANNEL_A, terminal_id, &value_a);
     ok_b = bit_ibit_loopback_channel(bus, MIL1553_CHANNEL_B, terminal_id, &value_b);
-    cross_ok = ok_a && ok_b && (value_a == value_a);
+    cross_ok = ok_a && ok_b && (value_a == value_b);
 
     if (!ok_a && !ok_b)
     {
-        // implements: LLR-1553-BIT-009, both channels' self-test capability lost is treated as fatal 
+        // implements: LLR-1553-BIT-009, both channels' self-test capability lost is treated as fatal
         pass = false;
-        failing_test = BIT_IBIT_TEST_LOOPBACK_A; // report A first per scan order 
+        failing_test = BIT_IBIT_TEST_LOOPBACK_A; // report A first per scan order
         result->state = MIL1553_BIT_STATE_FAIL;
     }
     else if (!ok_a || !ok_b)
@@ -74,7 +74,7 @@ bool bit_ibit_run(mil1553_bit_result_t *result, mil1553_bus_model_context_t *bus
         failing_test = BIT_IBIT_TEST_CROSS_CHANNEL;
         result->state = MIL1553_BIT_STATE_DEGRADED;
     }
-    else 
+    else
     {
         pass = true;
         result->state = (result->state == MIL1553_BIT_STATE_FAIL) ? MIL1553_BIT_STATE_FAIL : MIL1553_BIT_STATE_OPERATIONAL;
