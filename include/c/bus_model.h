@@ -74,7 +74,7 @@ uint32_t bus_model_get_listener_dropped_count(const mil1553_bus_model_context_t 
     normal listener_read_count cursor on this channel); intended for a bit_ibit's self-loopback test only: it needs to confirm its own transmitted word round-trips
     through the real channel, which the self-filtering in bus_model_receive deliberately prevents for every other caller 
 */
-bool bus_model_receive_loopback(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, mil1553_terminal_id_t terminal_id, mil1553_bus_record_t *out_record)
+bool bus_model_receive_loopback(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, mil1553_terminal_id_t terminal_id, mil1553_bus_record_t *out_record);
 
 // implements: LLR-1553-BUS-003
 mil1553_time_us_t bus_model_now_us(const mil1553_bus_model_context_t *ctx);

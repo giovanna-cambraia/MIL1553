@@ -28,7 +28,7 @@ extern "C" {
 bool bus_model_receive(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, mil1553_terminal_id_t listener_id, mil1553_bus_record_t *out_record);
 
 // implements: LLR-1553-BUS-003
-mil1553_time_us_t bus_model_us_now(const mil1553_bus_model_context_t *ctx);
+mil1553_time_us_t bus_model_now_us(const mil1553_bus_model_context_t *ctx);
 
 #ifdef __cplusplus
 }

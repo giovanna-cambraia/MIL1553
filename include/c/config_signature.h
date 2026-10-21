@@ -22,7 +22,7 @@ extern "C" {
 
 typedef enum {
     ERRINJECT_SIG_OK = 0,
-    ERRINJECT_SIG_MISSING = 1; // signature file absent/unreadable
+    ERRINJECT_SIG_MISSING = 1, // signature file absent/unreadable
     ERRINJECT_SIG_MISMATCH = 2 // digest differs or file malformed
 } errinject_sig_result_t;
 

@@ -63,7 +63,7 @@ bool bit_result_is_fatal(const mil1553_bit_result_t *result);
 // implements: LLR-1553-BIT-008, true if state is DEGRADED
 bool bit_result_is_degraded(const mil1553_bit_result_t *result);
 
-#ifdef __cpluspus
+#ifdef __cplusplus
 }
 #endif
 

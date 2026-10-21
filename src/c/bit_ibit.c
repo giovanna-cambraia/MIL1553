@@ -11,7 +11,7 @@ static bool bit_ibit_loopback_channel(mil1553_bus_model_context_t *bus, mil1553_
     mil1553_symbols_t symbols;
     mil1553_bus_record_t record;
 
-    mil1553_word_pack_data(BIT_IBIT_PATTTERN_VALUE, symbols);
+    mil1553_word_pack_data(BIT_IBIT_PATTERN_VALUE, symbols);
 
     if (!bus_model_transmit(bus, channel, symbls, terminal_id))
     {
@@ -34,7 +34,7 @@ static bool bit_ibit_loopback_channel(mil1553_bus_model_context_t *bus, mil1553_
         }
 
         *out_value = mil1553_word_unpack_data(decoded.field);
-        return (*out_value == BIT_IBIT_PATTTERN_VALUE);
+        return (*out_value == BIT_IBIT_PATTERN_VALUE);
     }
 }
 

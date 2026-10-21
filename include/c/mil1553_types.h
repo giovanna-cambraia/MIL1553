@@ -15,7 +15,7 @@
 */
 
 #ifndef MIL1553_H
-#define MIL1533_H
+#define MIL1553_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -32,7 +32,7 @@ extern "C"
 #define MIL1553_T_RESP_MIN_US (4U)
 #define MIL1553_T_RESP_MAX_US (12U)
 #define MIL1553_T_GAP_MIN_US (4U)
-#define MIL1553_NORESP_U (14U)
+#define MIL1553_NORESP_US (14U)
 #define MIL1553_MAX_DATA_WORDS (32U)
 #define MIL1553_RT_ADDR_BROADCAST (31U)
 #define MIL1553_RT_ADDR_MIN (0U)
@@ -75,43 +75,43 @@ extern "C"
     // word classification, LLR-1553-WORD-008
     typedef enum
     {
-        MIL1533_WORD_VALID = 0,
-        MIL1533_WORD_SYNC_ERROR = 1,
-        MIL1533_WORD_MANCHESTER_ERROR = 2,
-        MIL1533_WORD_PARITY_ERROR = 3
+        MIL1553_WORD_VALID = 0,
+        MIL1553_WORD_SYNC_ERROR = 1,
+        MIL1553_WORD_MANCHESTER_ERROR = 2,
+        MIL1553_WORD_PARITY_ERROR = 3
     } mil1553_word_class_t;
 
     // command validation result, LLR-1553-RT-002
     typedef enum
     {
-        MIL1533_CMD_VALID = 0,
-        MIL1533_CMD_ILLEGAL_SUBADDRESS = 1,
-        MIL1533_CMD_ILLEGAL_DIRECTION = 2,
-        MIL1533_CMD_ILLEGAL_WORD_COUNT = 3
+        MIL1553_CMD_VALID = 0,
+        MIL1553_CMD_ILLEGAL_SUBADDRESS = 1,
+        MIL1553_CMD_ILLEGAL_DIRECTION = 2,
+        MIL1553_CMD_ILLEGAL_WORD_COUNT = 3
     } mil1553_cmd_validation_t;
 
     // message type, used by BM reconstruction (LLR-1553-BM-002) and the bus transport contract (design/bus_transport_contract.md 3.1)
     typedef enum
     {
-        MIL1533_MSG_BC_TO_RT = 0,
-        MIL1533_MSG_RT_TO_BC = 1,
-        MIL1533_MSG_RT_TO_RT = 2,
-        MIL1533_MSG_MODE_CODE = 3,
-        MIL1533_MSG_BROADCOAST = 4
+        MIL1553_MSG_BC_TO_RT = 0,
+        MIL1553_MSG_RT_TO_BC = 1,
+        MIL1553_MSG_RT_TO_RT = 2,
+        MIL1553_MSG_MODE_CODE = 3,
+        MIL1553_MSG_BROADCOAST = 4
     } mil1553_msg_type_t;
 
     // bus channel identifier
     typedef uint8_t mil1553_channel_t;
 
 #define MIL1553_CHANNEL_A ((mil1553_channel_t)0U)
-#define MIL1533_CHANNEL_B ((mil1553_channel_t)1U)
+#define MIL1553_CHANNEL_B ((mil1553_channel_t)1U)
 
     // terminal identity, per bus_transport_contract.md 3
     typedef uint8_t mil1553_terminal_id_t;
 
-#define MIL1533_TERMINAL_BC ((mil1553_terminal_id_t)0U)
-#define MIL1533_TERMINAL_RT1 ((mil1553_terminal_id_t)1U)
-#define MIL1533_TERMINAL_RT2 ((mil1553_terminal_id_t)2U)
+#define MIL1553_TERMINAL_BC ((mil1553_terminal_id_t)0U)
+#define MIL1553_TERMINAL_RT1 ((mil1553_terminal_id_t)1U)
+#define MIL1553_TERMINAL_RT2 ((mil1553_terminal_id_t)2U)
 #define MIL1553_TERMINAL_BM ((mil1553_terminal_id_t)3U)
 
     // status word bit positions (LLR-1553-WORD-003 layout)

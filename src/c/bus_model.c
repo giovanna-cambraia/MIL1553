@@ -20,7 +20,7 @@
 
 static mil1553_bus_channel_state_t *bus_model_channel_state(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel)
 {
-    return (channel == MIL1533_CHANNEL_A) ? &ctx->channel[0] : &ctx->channel[1];
+    return (channel == MIL1553_CHANNEL_A) ? &ctx->channel[0] : &ctx->channel[1];
 }
 
 static const mil1553_bus_channel_state_t *bus_model_channel_state_const(const mil1553_bus_model_context_t *ctx, mil1553_channel_t channel)

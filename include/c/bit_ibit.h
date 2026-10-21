@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define BIT_IBIT_PATTTERN_VALUE ((mil1553_data_t)0x5AA5U) // known pattern, LLR-1553-BIT-007
+#define BIT_IBIT_PATTERN_VALUE ((mil1553_data_t)0x5AA5U) // known pattern, LLR-1553-BIT-007
 
 /*
     implements: LLR-1553-BIT-007

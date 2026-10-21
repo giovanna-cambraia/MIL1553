@@ -11,7 +11,7 @@
 */
 
 #ifndef MIL1553_CRC_PARITY_H
-#define MIL_1553_CRC_PARITY_H
+#define MIL1553_CRC_PARITY_H
 
 #include <stdint.h>
 #include <stdbool.h>

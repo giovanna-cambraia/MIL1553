@@ -55,7 +55,7 @@ typedef struct {
 } mil1553_bit_cbit_context_t;
 
 // implements: LLR-1553-BIT-002
-void bit_cbit_init(mil1553_bit_cbit_context_t ctx, mil1553_time_us_t watchdog_period_us);
+void bit_cbit_init(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t watchdog_period_us);
 
 /*
     implements: LLR-1553-BIT-005

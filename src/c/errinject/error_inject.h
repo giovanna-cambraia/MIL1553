@@ -153,7 +153,7 @@ void errinject_observation_clear(errinject_observation_t *obs);
 void errinject_observation_add_log(errinject_observation_t *obs, const mil1553_error_record_t *records, uint32_t record_count);
 
 // the interposition point used by bus_model_tx_hooded.c; may modify symbols in place or ask for word to be dropped
-void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel_t channel, mil1533_terminal_id_t sender, mil1553_symbols_t symbols, bool *drop);
+void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel_t channel, mil1553_terminal_id_t sender, mil1553_symbols_t symbols, bool *drop);
 
 // results and diagnostics
 uint32_t errinject_result_count(void);
