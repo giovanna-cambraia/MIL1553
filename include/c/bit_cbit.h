@@ -86,6 +86,8 @@ void bit_cbit_record_word_count_violation(mil1553_bit_cbit_context_t *ctx);
 */
 void bit_cbit_tick(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t now_us);
 
+void bit_cbit_watchdog_kick(mil1553_bit_cbit_context_t *ctx, mil1553_time_us_t now_us);
+
 /*
     implements: LLR-1553-BIT-005, LLR-1553-BIT-006, LLR-1553-BIT-008
 

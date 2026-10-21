@@ -37,7 +37,7 @@ typedef struct {
 } mil1553_bus_record_t;
 
 typedef struct {
-    mil1553_bus_record_t[BUS_MODEL_QUEUE_CAPACITY]; // ring log
+    mil1553_bus_record_t records[BUS_MODEL_QUEUE_CAPACITY]; // ring log
     uint32_t total_written; // monotonically increasing count ever written
     bool failed;
 } mil1553_bus_channel_state_t;
