@@ -7,7 +7,7 @@
         - symbol get/set helpers are file-local (static)
 */
 
-#include "mil1553_manchester.h"
+#include "manchester.h"
 
 #define MANCHESTER_SYNC_SYMBOL_COUNT    (6U)
 #define MANCHESTER_FIELD_BIT_COUNT      (16U)

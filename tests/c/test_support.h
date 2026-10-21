@@ -25,7 +25,7 @@ static inline void ts_cmd(mil1553_symbols_t out, uint8_t rt, mil1553_tr_t tr, ui
 
 static inline void ts_status(mil1553_symbols_t out, uint8_t rt, bool me, bool busy, bool sf, bool tf, bool bcr)
 {
-    mil1553_status_field_t s;
+    mil1553_status_fields_t s;
     (void)memset(&s, 0, sizeof(s));
     s.rt_address = rt; s.message_error = me; s.busy = busy;
     s.subsystem_flag = sf; s.terminal_flag = tf; s.broadcast_received = bcr;

@@ -10,7 +10,7 @@
 #include "bus_model_internal.h"
 
 // implements: LLR-1553-BUS-001, LLR-1553-BUS-002
-bool bus_model_transmit(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, const mil11553_symbols_t symbols, mil1553_terminal_id_t sender)
+bool bus_model_transmit(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, const mil1553_symbols_t symbols, mil1553_terminal_id_t sender)
 {
     return bus_model_transmit_raw(ctx, channel, symbols, sender);
 }
