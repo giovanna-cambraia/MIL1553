@@ -7,7 +7,7 @@
 
 #include "test_support.h"
 
-static mil1553_bus_model_t bus;
+static mil1553_bus_model_context_t bus;
 
 void setUp(void) { bus_model_init(&bus); }
 void tearDown(void) {}
@@ -47,9 +47,9 @@ void test_llr_1553_bus_001_one_listener_reading_does_not_consume_for_others(void
     mil1553_symbols_t s; mil1553_bus_record_t r;
     ts_data(s, 7U);
     (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, s, MIL1553_TERMINAL_BC);
-    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_BM, &r));
-    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_RT1, &r));
-    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_RT2, &r));
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BM, &r));
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT2, &r));
 }
 
 void test_llr_1553_bus_001_words_arrive_in_transmission_order(void)
@@ -59,7 +59,7 @@ void test_llr_1553_bus_001_words_arrive_in_transmission_order(void)
     for (i = 0U; i < 5U; i++)
     {
         TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
-        (void)ts.decode(r.symbols, &field, (mil1553_sync_t *)0);
+        (void)ts_decode(r.symbols, &field, (mil1553_sync_t *)0);
         TEST_ASSERT_EQUAL_UINT16((uint16_t)(100U + i), field);
     }
 }
@@ -69,7 +69,7 @@ void test_llr_1553_bus_001_channels_are_independent(void)
     mil1553_symbols_t s; mil1553_bus_record_t r;
     ts_data(s, 5U);
     (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, s, MIL1553_TERMINAL_BC);
-    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_RT1, &r));
+    TEST_ASSERT_FALSE(ts_rx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_RT1, &r));
     TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
 }
 
@@ -104,7 +104,7 @@ void test_llr_1553_bus_001_listener_that_falls_behind_the_ring_loses_oldest_and_
     ts_data(s, 1U);
     for (i = 0U; i < total; i++) { (void)ts_tx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, s); }
 
-    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINl_RT1, &r));
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
     TEST_ASSERT_EQUAL_UINT64((uint64_t)6U * MIL1553_WORD_TIME_US, r.timestamp_us); // 7th word onward
     TEST_ASSERT_EQUAL_UINT32(6U, bus_model_get_listener_dropped_count(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1));
     TEST_ASSERT_EQUAL_UINT32(0U, bus_model_get_listener_dropped_count(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BM));
@@ -117,7 +117,7 @@ void test_llr_1553_bus_001_loopback_read_sees_own_word_without_disturbing_normal
     (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, s, MIL1553_TERMINAL_RT1);
 
     TEST_ASSERT_FALSE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r)); // normal read skips own 
-    TEST_ASSERT_TRUE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, *r));
+    TEST_ASSERT_TRUE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
     TEST_ASSERT_EQUAL(MIL1553_TERMINAL_RT1, r.sender);
     TEST_ASSERT_FALSE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
     TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, &r)); // others unaffected 
@@ -140,7 +140,7 @@ void test_lle_1553_bus_002_record_carries_timestamp_sender_and_symbols(void)
     bus_model_advance_us(&bus, 123U);
     (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, s, MIL1553_TERMINAL_BC);
 
-    TEST_ASSERT_TRUE(ts_rc(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BM, &r));
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BM, &r));
     TEST_ASSERT_EQUAL_UINT64(123U, r.timestamp_us);
     TEST_ASSERT_EQUAL(MIL1553_TERMINAL_BC, r.sender);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(s, r.symbols, 5);
@@ -159,7 +159,7 @@ void test_llr_1553_bus_003_clock_starts_at_zero_and_moves_only_when_advanced(voi
     TEST_ASSERT_EQUAL_UINT64(25U, bus_model_now_us(&bus));
 }
 
-void_test_llr_1553_bus_003_identical_runs_give_identical_timestamps(void)
+void test_llr_1553_bus_003_identical_runs_give_identical_timestamps(void)
 {
     mil1553_bus_model_context_t other;
     mil1553_symbols_t s; mil1553_bus_record_t r1, r2; unsigned i;

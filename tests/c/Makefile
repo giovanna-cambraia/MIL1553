@@ -16,7 +16,7 @@ PYTHON  ?= python3
 ROOT    := ../..
 
 ifeq ($(OS),Windows_NT)
-EXE := .exegit
+EXE := .exe
 else
 EXE :=
 endif
@@ -24,10 +24,14 @@ endif
 CFLAGS  := -std=c11 -Wall -Wextra -Wshadow -g \
            -I$(ROOT)/include/c -I$(ROOT)/src/c -Iunity -I.
 
-# Release-configuration library: every src/c/*.c except the role entry points. src/c/errinject/ is deliberately NOT listed: unit tests exercise the release
-# build (bus_model_tx.c, no injector). Error-injection tests have their own test-configuration target
-LIB_SRC := $(filter-out $(ROOT)/src/c/main_%.c,$(wildcard $(ROOT)/src/c/*.c))
-LIB_OBJ := $(patsubst $(ROOT)/src/c/%.c,build/obj/%.o,$(LIB_SRC))
+# Release-configuration library: every src/c/*.c except the role entry points
+# (main_*.c) and standalone programs (hsi_smoke.c). src/c/errinject/ is
+# deliberately NOT listed: unit tests exercise the release build
+# (bus_model_tx.c, no injector). Error-injection tests have their own
+# test-configuration target.
+LIB_EXCLUDE := $(ROOT)/src/c/main_%.c $(ROOT)/src/c/hsi_smoke.c
+LIB_SRC     := $(filter-out $(LIB_EXCLUDE),$(wildcard $(ROOT)/src/c/*.c))
+LIB_OBJ     := $(patsubst $(ROOT)/src/c/%.c,build/obj/%.o,$(LIB_SRC))
 
 TESTS   := $(basename $(notdir $(wildcard test_*.c)))
 RESULTS := $(addprefix build/,$(addsuffix .result,$(TESTS)))

@@ -132,7 +132,7 @@ void test_llr_1553_word_002_encode_decode_roundtrip_all_counts(void)
     {
         mil1553_word_count_t f;
         TEST_ASSERT_TRUE(mil1553_word_encode_word_count(n, &f));
-        TEST_ASSERT_EQUAL(n, mil1553_word_decode_word_count);
+        TEST_ASSERT_EQUAL_UINT8(n, mil1553_word_decode_word_count(f));
     }
 }
 
@@ -173,8 +173,8 @@ void test_llr_1553_word_003_rt_address_in_top_five_bits_and_reserved_bits_zero(v
     s.broadcast_received = s.instrumentation = s.service_request = s.dbc_acceptance = true;
     TEST_ASSERT_TRUE(mil1553_word_pack_status(&s, sym));
     (void)ts_decode(sym, &field, (mil1553_sync_t *)0);
-    TEST_ASSERT_EQUAL_HEX_16(0xF800U, (uint16_t)(field & 0xF800U));
-    TEST_ASSERT_EQUAL_HEX_16(0x0000U, (uint16_t)(field & 0x00E0U)); // bits 7..5
+    TEST_ASSERT_EQUAL_HEX16(0xF800U, (uint16_t)(field & 0xF800U));
+    TEST_ASSERT_EQUAL_HEX16(0x0000U, (uint16_t)(field & 0x00E0U)); // bits 7..5
 }
 
 void test_llr_1553_word_003_unpack_flags_nonzero_reserved_bits(void)
@@ -261,7 +261,7 @@ void test_llr_1553_word_005_check_accepts_correct_and_reject_flipped_exhaustive(
 
 void test_llr_1553_1553_word_005_check_examines_only_bit_zero_of_received_parity(void)
 {
-    uint8_t = crc_parity_compute(0x0001U); // one 1-bit -> parity 
+    uint8_t p = crc_parity_compute(0x0001U); // one 1-bit -> parity
     TEST_ASSERT_EQUAL_UINT8(0U, p);
     TEST_ASSERT_TRUE(crc_parity_check(0x0001U, 0x02U)); // bit0 = 0: accepted
     TEST_ASSERT_FALSE(crc_parity_check(0x0001U, 0x03U)); // bit0 = 1: rejected 
@@ -291,7 +291,7 @@ void test_llr_1553_word_006_encodes_matches_independent_symbol_model(void)
 
 void test_llr_1553_word_006_encode_rejects_non_transmittable_sync_and_zeroes_output(void)
 {
-    mil1553_symbols_t = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+    mil1553_symbols_t s = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
     const mil1553_symbols_t zero = {0, 0, 0, 0, 0};
     TEST_ASSERT_FALSE(manchester_encode_word(MIL1553_SYNC_INVALID, 0x1234U, 0U, s));
     TEST_ASSERT_EQUAL_UINT8_ARRAY(zero, s, 5);

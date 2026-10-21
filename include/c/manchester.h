@@ -46,7 +46,7 @@ extern "C"
         returns:
             true on success, false if sync was not a valid transmittable sync type
     */
-    bool mil1553_manchester_encode_word(mil1553_sync_t sync, uint16_t field, uint8_t parity, mil1553_symbols_t out_symbols);
+    bool manchester_encode_word(mil1553_sync_t sync, uint16_t field, uint8_t parity, mil1553_symbols_t out_symbols);
 
     /*
         implements: LLR-1553-WORD-007
@@ -68,7 +68,7 @@ extern "C"
             callers must still check *out_violation and *out_sync individually if they need to distinguish the failure season
             (this is what mil1553_word's ckassify_word, LLR-1553-WORD-008, does
     */
-    bool mil1553_manchester_decode_word(const mil1553_symbols_t in_symbols, mil1553_sync_t *out_sync, uint16_t *out_field,
+    bool manchester_decode_word(const mil1553_symbols_t in_symbols, mil1553_sync_t *out_sync, uint16_t *out_field,
                            uint8_t *out_parity, bool *out_violation);
 
 #ifdef __cplusplus

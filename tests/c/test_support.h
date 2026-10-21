@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include "unity.h"  
 #include "mil1553_types.h"
 #include "mil1553_word.h"
 #include "bus_model.h"

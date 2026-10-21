@@ -92,7 +92,7 @@ bool mil1553_word_pack_command(const mil1553_command_fields_t *fields, mil1553_s
 
     if (!valid)
     {
-        (void)mil1553_manchester_encode_word(MIL1553_SYNC_INVALID, 0U, 0U, out_symbols);
+        (void)manchester_encode_word(MIL1553_SYNC_INVALID, 0U, 0U, out_symbols);
         return false;
     }
 
@@ -103,7 +103,7 @@ bool mil1553_word_pack_command(const mil1553_command_fields_t *fields, mil1553_s
 
     parity = crc_parity_compute(packed_field);
 
-    return mil1553_manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
+    return manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
 }
 
 // implements: LLR-1553-WORD-001
@@ -126,7 +126,7 @@ bool mil1553_word_pack_status(const mil1553_status_fields_t *fields,
 
     if (fields->rt_address > 31U)
     {
-        (void)mil1553_manchester_encode_word(MIL1553_SYNC_INVALID, 0U, 0U, out_symbols);
+        (void)manchester_encode_word(MIL1553_SYNC_INVALID, 0U, 0U, out_symbols);
         return false;
     }
 
@@ -143,7 +143,7 @@ bool mil1553_word_pack_status(const mil1553_status_fields_t *fields,
 
     parity = crc_parity_compute(packed_field);
 
-    return mil1553_manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
+    return manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
 }
 
 // implements: LLR-1553-WORD-003
@@ -170,7 +170,7 @@ void mil1553_word_pack_data(mil1553_data_t value, mil1553_symbols_t out_symbols)
 {
     uint8_t parity = crc_parity_compute((uint16_t)value);
 
-    (void)mil1553_manchester_encode_word(MIL1553_SYNC_DATA, (uint16_t)value, parity, out_symbols);
+    (void)manchester_encode_word(MIL1553_SYNC_DATA, (uint16_t)value, parity, out_symbols);
 }
 
 // implements: LLR-1553-WORD-004
@@ -190,7 +190,7 @@ mil1553_word_class_t mil1553_word_classify(const mil1553_symbols_t in_symbols, m
     bool violation;
     mil1553_word_class_t result;
 
-    (void)mil1553_manchester_decode_word(in_symbols, &sync, &field, &parity, &violation);
+    (void)manchester_decode_word(in_symbols, &sync, &field, &parity, &violation);
 
     out_decoded->sync = sync;
     out_decoded->field = field;
