@@ -29,7 +29,7 @@ extern "C" {
 
 typedef struct {
     uint8_t ram_test_region[BIT_PBIT_RAM_TEST_REGION_SIZE];
-    uint32_t rom_reference_checksum; // captured at bit_pbit_ibit
+    uint32_t rom_reference_checksum; // captured at bit_pbit_init
     bool rom_reference_captured;
 } mil1553_bit_pbit_context_t;
 

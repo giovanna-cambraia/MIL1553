@@ -97,7 +97,7 @@ extern "C"
         MIL1553_MSG_RT_TO_BC = 1,
         MIL1553_MSG_RT_TO_RT = 2,
         MIL1553_MSG_MODE_CODE = 3,
-        MIL1553_MSG_BROADCOAST = 4
+        MIL1553_MSG_BROADCAST = 4
     } mil1553_msg_type_t;
 
     // bus channel identifier
@@ -192,7 +192,7 @@ extern "C"
         MIL1553_ERR_STATUS_TF = 8,
         MIL1553_ERR_WORD_COUNT_MISMATCH = 9,
         MIL1553_ERR_MINOR_FRAME_OVERRUN = 10,
-        MIL1553_ERR_TRANSPORT = 11,
+        MIL1553_ERR_TRANSPORT = 11
     } mil1553_error_type_t;
 
     // error log record, LLR-1553-ERR-004

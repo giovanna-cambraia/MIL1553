@@ -16,6 +16,8 @@
         designation), not each entry's preferred_bus, preferred_bus is reserved for schedule validation
         grouping; this keeps "primary bus" a single BC-wide concept, matching LLR-1553-REDUN-002's per BC
         (not per message) failover
+        - a MODE_CODE entry addressed to MIL1553_RT_ADDR_BROADCAST is a broadcast mode command: like
+        MIL1553_MSG_BROADCAST, no status/response phase is expected (LLR-1553-BC-007)
 */
 
 #include "bc_scheduler.h"
@@ -36,6 +38,13 @@ static mil1553_channel_t bc_alternate_channel(mil1553_channel_t channel)
 static uint8_t bc_channel_index(mil1553_channel_t channel)
 {
     return (uint8_t)((channel == MIL1553_CHANNEL_A) ? 0U : 1U);
+}
+
+// true if no status/response phase follows this entry (LLR-1553-BC-007)
+static bool bc_entry_is_broadcast(const mil1553_bc_schedule_entry_t *e)
+{
+    return (e->msg_type == MIL1553_MSG_BROADCAST) ||
+           ((e->msg_type == MIL1553_MSG_MODE_CODE) && (e->rt_address == MIL1553_RT_ADDR_BROADCAST));
 }
 
 // implements: LLR-1553-ERR-004 (BC side)
@@ -63,6 +72,26 @@ static void bc_transmit_word(mil1553_bc_context_t *ctx, mil1553_channel_t channe
 {
     (void)bus_model_transmit(ctx->bus, channel, symbols, MIL1553_TERMINAL_BC);
     bus_model_advance_us(ctx->bus, (mil1553_time_us_t)MIL1553_WORD_TIME_US);
+}
+
+/*
+    implements: LLR-1553-BC-008
+
+    no command word earlier than T_GAP_MIN_US after the end of the previous message (or after its no-response
+    timeout expiry, which is what last_activity_end_us holds after a timeout); the BC idles the gap out
+*/
+static void bc_wait_gap(mil1553_bc_context_t *ctx)
+{
+    if (ctx->message_ever_sent)
+    {
+        mil1553_time_us_t earliest = (mil1553_time_us_t)(ctx->last_activity_end_us + (mil1553_time_us_t)MIL1553_T_GAP_MIN_US);
+        mil1553_time_us_t now = bc_now(ctx);
+
+        if (now < earliest)
+        {
+            bus_model_advance_us(ctx->bus, (mil1553_time_us_t)(earliest - now));
+        }
+    }
 }
 
 // implements: LLR-1553-BC-001 (duration formula per timing_budget.md 4)
@@ -94,9 +123,16 @@ uint32_t bc_message_duration_us(const mil1553_bc_schedule_entry_t *entry)
         break;
 
     case MIL1553_MSG_MODE_CODE:
-        if (entry->has_data_word)
+        if (bc_entry_is_broadcast(entry))
         {
-            // mode_cmd + data(1) + resp_delay + status + gap
+            // broadcast mode command: cmd (+ data) + gap, no status phase
+            duration = MIL1553_WORD_TIME_US +
+                       (entry->has_data_word ? MIL1553_WORD_TIME_US : 0U) +
+                       MIL1553_T_GAP_MIN_US;
+        }
+        else if (entry->has_data_word)
+        {
+            // mode_cmd + data(1) + resp_delay + status + gap (worst case of either data direction)
             duration = MIL1553_WORD_TIME_US + MIL1553_WORD_TIME_US +
                        MIL1553_T_RESP_MAX_US + MIL1553_WORD_TIME_US + MIL1553_T_GAP_MIN_US;
         }
@@ -150,11 +186,22 @@ static const bc_mode_entry_t BC_MODE_TABLE[32] = {
     /* 30 */ { false, false, false }, /* 31 */ { false, false, false }
 };
 
+// data subaddresses are 1..30; 0 and 31 are mode indicators (LLR-1553-BC-006)
+static bool bc_subaddress_is_data(mil1553_subaddr_t sa)
+{
+    return (sa >= 1U) && (sa <= 30U);
+}
+
 // implements: LLR-1553-BC-001, LLR-1553-BC-006
 bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
 {
     uint8_t i;
     uint8_t j;
+
+    if (schedule == (const mil1553_bc_schedule_t *)0)
+    {
+        return false;
+    }
 
     if ((schedule->entry_count > BC_MAX_SCHEDULE_ENTRIES) ||
         (schedule->minor_frame_count == 0U) ||
@@ -169,16 +216,48 @@ bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
         const mil1553_bc_schedule_entry_t *e = &schedule->entries[i];
         uint32_t duration;
 
-        if ((e->rt_address > MIL1553_RT_ADDR_BROADCAST) ||
-            (e->minor_frame_index >= schedule->minor_frame_count) ||
-            (e->subaddress > 31U) || (e->subaddress_2 > 31U))
+        if ((e->msg_type != MIL1553_MSG_BC_TO_RT) && (e->msg_type != MIL1553_MSG_RT_TO_BC) &&
+            (e->msg_type != MIL1553_MSG_RT_TO_RT) && (e->msg_type != MIL1553_MSG_MODE_CODE) &&
+            (e->msg_type != MIL1553_MSG_BROADCAST))
         {
             return false;
         }
 
-        if ((e->msg_type == MIL1553_MSG_RT_TO_RT) && (e->rt_address_2 > MIL1553_RT_ADDR_MAX))
+        if ((e->minor_frame_index >= schedule->minor_frame_count) ||
+            (e->preferred_bus > MIL1553_CHANNEL_B) ||
+            (e->slot_offset_us > schedule->minor_frame_period_us))
         {
             return false;
+        }
+
+        // RT address: a real RT (0-30) for every addressed format; BROADCAST ignores it (the command always goes to 31);
+        // a MODE_CODE entry may also target 31 (broadcast mode command)
+        if (e->msg_type == MIL1553_MSG_MODE_CODE)
+        {
+            if (e->rt_address > MIL1553_RT_ADDR_BROADCAST)
+            {
+                return false;
+            }
+        }
+        else if (e->msg_type != MIL1553_MSG_BROADCAST)
+        {
+            if (e->rt_address > MIL1553_RT_ADDR_MAX)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // BROADCAST: rt_address not used
+        }
+
+        if (e->msg_type == MIL1553_MSG_RT_TO_RT)
+        {
+            if ((e->rt_address_2 > MIL1553_RT_ADDR_MAX) || (e->rt_address_2 == e->rt_address) ||
+                (!bc_subaddress_is_data(e->subaddress_2)))
+            {
+                return false;
+            }
         }
 
         if (e->msg_type == MIL1553_MSG_MODE_CODE)
@@ -197,19 +276,19 @@ bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
             {
                 return false;
             }
-        }
-
-        if ((e->msg_type == MIL1553_MSG_BC_TO_RT) || (e->msg_type == MIL1553_MSG_RT_TO_BC) ||
-            (e->msg_type == MIL1553_MSG_RT_TO_RT) || (e->msg_type == MIL1553_MSG_BROADCAST))
-        {
-            if ((e->data_word_count == 0U) || (e->data_word_count > MIL1553_MAX_DATA_WORDS))
+            // a broadcast mode command cannot ask an RT to return a data word
+            if ((e->rt_address == MIL1553_RT_ADDR_BROADCAST) && m->has_data_word && (!m->data_from_bc))
             {
-                // broadcast with 0 data words (e.g. a broadcast mode command carried via MODE_CODE msg_type instead)
-                // is valid; non-mode formats require 1-32
-                if (e->msg_type != MIL1553_MSG_BROADCAST)
-                {
-                    return false;
-                }
+                return false;
+            }
+        }
+        else
+        {
+            // every non-mode format carries a real subaddress and 1-32 data words
+            if ((!bc_subaddress_is_data(e->subaddress)) ||
+                (e->data_word_count == 0U) || (e->data_word_count > MIL1553_MAX_DATA_WORDS))
+            {
+                return false;
             }
         }
 
@@ -219,7 +298,7 @@ bool bc_validate_schedule(const mil1553_bc_schedule_t *schedule)
             return false;
         }
 
-        // no overlap check against every other entry in the same minor frame (bounded double,
+        // overlap check against every other entry in the same minor frame (bounded double loop,
         // i and j both <= BC_MAX_SCHEDULE_ENTRIES, no recursion - MISRA compliant)
         for (j = 0U; j < schedule->entry_count; j++)
         {
@@ -252,9 +331,13 @@ bool bc_init(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_t *schedule,
 {
     uint8_t i;
 
-    if (!bc_validate_schedule(schedule))
+    if ((ctx == (mil1553_bc_context_t *)0) || (bus == (mil1553_bus_model_context_t *)0) ||
+        (initial_primary_bus > MIL1553_CHANNEL_B) || (!bc_validate_schedule(schedule)))
     {
-        ctx->state = MIL1553_BC_STATE_IDLE;
+        if (ctx != (mil1553_bc_context_t *)0)
+        {
+            ctx->state = MIL1553_BC_STATE_IDLE;
+        }
         return false;
     }
 
@@ -376,14 +459,14 @@ static void bc_begin_response_tracking(mil1553_bc_context_t *ctx, const mil1553_
 static void bc_issue_bc_to_rt(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
 {
     mil1553_command_fields_t cmd;
-    mil1553_word_count_t wc_field;
+    mil1553_word_count_t wc_field = 0U;
     mil1553_symbols_t symbols;
     uint8_t i;
 
     cmd.rt_address = e->rt_address;
     cmd.tr_bit = MIL1553_TR_RECEIVE;
     cmd.subaddress = e->subaddress;
-    (void)mil1553_word_encode_word_count(e->data_word_count, &wc_field);
+    (void)mil1553_word_encode_word_count(e->data_word_count, &wc_field); // count validated by bc_validate_schedule
     cmd.word_count_field = wc_field;
 
     (void)mil1553_word_pack_command(&cmd, symbols);
@@ -401,7 +484,7 @@ static void bc_issue_bc_to_rt(mil1553_bc_context_t *ctx, const mil1553_bc_schedu
 static void bc_issue_rt_to_bc(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
 {
     mil1553_command_fields_t cmd;
-    mil1553_word_count_t wc_field;
+    mil1553_word_count_t wc_field = 0U;
     mil1553_symbols_t symbols;
 
     cmd.rt_address = e->rt_address;
@@ -419,7 +502,7 @@ static void bc_issue_rt_to_rt(mil1553_bc_context_t *ctx, const mil1553_bc_schedu
 {
     mil1553_command_fields_t recv_cmd;
     mil1553_command_fields_t xmit_cmd;
-    mil1553_word_count_t wc_field;
+    mil1553_word_count_t wc_field = 0U;
     mil1553_symbols_t symbols;
 
     recv_cmd.rt_address = e->rt_address; // receiving RT
@@ -433,7 +516,7 @@ static void bc_issue_rt_to_rt(mil1553_bc_context_t *ctx, const mil1553_bc_schedu
     xmit_cmd.subaddress = e->subaddress_2;
     xmit_cmd.word_count_field = wc_field;
 
-    // issues back to back, get LLR-1553-BC-005
+    // issued back to back, per LLR-1553-BC-005
     (void)mil1553_word_pack_command(&recv_cmd, symbols);
     bc_transmit_word(ctx, channel, symbols);
 
@@ -448,7 +531,7 @@ static void bc_issue_mode_code(mil1553_bc_context_t *ctx, const mil1553_bc_sched
     mil1553_symbols_t symbols;
 
     cmd.rt_address = e->rt_address;
-    cmd.tr_bit = e->has_data_word && e->mode_data_from_bc ? MIL1553_TR_RECEIVE : MIL1553_TR_TRANSMIT;
+    cmd.tr_bit = (e->has_data_word && e->mode_data_from_bc) ? MIL1553_TR_RECEIVE : MIL1553_TR_TRANSMIT;
     cmd.subaddress = 0U; // mode indicator, 00000 convention (mil1553_notes.md 5)
     cmd.word_count_field = (mil1553_word_count_t)e->mode_code;
 
@@ -466,7 +549,7 @@ static void bc_issue_mode_code(mil1553_bc_context_t *ctx, const mil1553_bc_sched
 static void bc_issue_broadcast(mil1553_bc_context_t *ctx, const mil1553_bc_schedule_entry_t *e, mil1553_channel_t channel)
 {
     mil1553_command_fields_t cmd;
-    mil1553_word_count_t wc_field;
+    mil1553_word_count_t wc_field = 0U;
     mil1553_symbols_t symbols;
     uint8_t i;
 
@@ -576,7 +659,14 @@ static void bc_mark_rt_failed(mil1553_bc_context_t *ctx, const mil1553_bc_schedu
     }
 }
 
-// implements LLR-1553-BC-010 (state machine), one step per call
+// a message completed successfully: clear the consecutive-failure count of the bus it ran on
+static void bc_message_succeeded(mil1553_bc_context_t *ctx)
+{
+    ctx->consecutive_fail_count[bc_channel_index(ctx->current_message_bus)] = 0U;
+    ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
+}
+
+// implements: LLR-1553-BC-010 (state machine), one step per call
 
 bool bc_run_frame(mil1553_bc_context_t *ctx)
 {
@@ -654,22 +744,14 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
                 ctx->current_message_bus = ctx->primary_bus;
                 ctx->retry_used_for_current_message = false;
 
-                // implements: LLR-1553-BC-008: no command word earlier than T_GAP_MIN_US after the end of the
-                // previous message (or after its no-response timeout expiry, which is what last_activity_end_us
-                // holds after a timeout); the BC idles the gap out
-                if (ctx->message_ever_sent &&
-                    (bc_now(ctx) < (mil1553_time_us_t)(ctx->last_activity_end_us + MIL1553_T_GAP_MIN_US)))
-                {
-                    bus_model_advance_us(ctx->bus,
-                        (mil1553_time_us_t)((ctx->last_activity_end_us + MIL1553_T_GAP_MIN_US) - bc_now(ctx)));
-                }
+                bc_wait_gap(ctx); // LLR-1553-BC-008
 
                 bc_issue_message(ctx, e, ctx->current_message_bus);
                 ctx->message_ever_sent = true;
                 ctx->message_start_time_us = bc_now(ctx);
                 ctx->last_activity_end_us = ctx->message_start_time_us;
 
-                if (e->msg_type == MIL1553_MSG_BROADCAST)
+                if (bc_entry_is_broadcast(e))
                 {
                     // no status expected, per LLR-1553-BC-007; message is already complete, stay in MINOR_FRAME to scan for the next entry
                 }
@@ -713,21 +795,20 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
         {
             mil1553_decoded_word_t decoded;
             mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
+            mil1553_time_us_t word_end = (mil1553_time_us_t)(record.timestamp_us + MIL1553_WORD_TIME_US);
 
+            // implements: LLR-1553-BC-009: the timeout window restarts from the end of each word actually received
+            if (word_end > ctx->last_activity_end_us)
             {
-                // implements: LLR-1553-BC-009: the timeout window restarts from the end of each word actually received
-                mil1553_time_us_t word_end = (mil1553_time_us_t)(record.timestamp_us + MIL1553_WORD_TIME_US);
-                if (word_end > ctx->last_activity_end_us)
-                {
-                    ctx->last_activity_end_us = word_end;
-                }
+                ctx->last_activity_end_us = word_end;
             }
 
             if (ctx->cbit != (mil1553_bit_cbit_context_t *)0)
             {
                 // implements: LLR-1553-BIT-005
                 bit_cbit_record_word(ctx->cbit, ctx->current_message_bus, cls);
-                if ((cls == MIL1553_WORD_VALID) && (ctx->response_stage == 0U))
+                if ((cls == MIL1553_WORD_VALID) && (ctx->response_stage == 0U) &&
+                    (record.timestamp_us >= ctx->message_start_time_us))
                 {
                     bit_cbit_record_response_time(ctx->cbit,
                         (uint32_t)(record.timestamp_us - ctx->message_start_time_us));
@@ -736,9 +817,29 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
 
             if (cls != MIL1553_WORD_VALID)
             {
-                mil1553_error_type_t et = (cls == MIL1553_WORD_SYNC_ERROR) ? MIL1553_ERR_SYNC : (cls == MIL1553_WORD_MANCHESTER_ERROR) ? MIL1553_ERR_MANCHESTER
-                                                                                                                                       : MIL1553_ERR_PARITY;
+                mil1553_error_type_t et;
+
+                if (cls == MIL1553_WORD_SYNC_ERROR)
+                {
+                    et = MIL1553_ERR_SYNC;
+                }
+                else if (cls == MIL1553_WORD_MANCHESTER_ERROR)
+                {
+                    et = MIL1553_ERR_MANCHESTER;
+                }
+                else
+                {
+                    et = MIL1553_ERR_PARITY;
+                }
                 bc_log_error(ctx, ctx->current_message_bus, et, (uint32_t)ctx->current_entry_snapshot_index);
+                ctx->state = MIL1553_BC_STATE_TIMEOUT;
+            }
+            else if (((ctx->response_stage == 1U) && (decoded.sync != MIL1553_SYNC_DATA)) ||
+                     ((ctx->response_stage != 1U) && (decoded.sync != MIL1553_SYNC_COMMAND_STATUS)))
+            {
+                // valid word, but of the wrong kind for this stage (e.g. a data word where a status was expected)
+                bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_SYNC,
+                             (uint32_t)ctx->current_entry_snapshot_index);
                 ctx->state = MIL1553_BC_STATE_TIMEOUT;
             }
             else if (ctx->response_stage == 0U)
@@ -749,184 +850,186 @@ bool bc_run_frame(mil1553_bc_context_t *ctx)
 
                 if (status.rt_address != ctx->response_primary_rt)
                 {
-                    bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_ADDRESS_MISMATCH, 
+                    bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_ADDRESS_MISMATCH,
                                  (uint32_t)ctx->current_entry_snapshot_index);
-                    
                     ctx->state = MIL1553_BC_STATE_TIMEOUT;
                 }
                 else if (status.message_error)
                 {
                     bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_ME,
-                                     (uint32_t)ctx->current_entry_snapshot_index);
-                        ctx->state = MIL1553_BC_STATE_TIMEOUT;
-                    }
-                    else
-                    {
-                        if (status.busy)
-                        {
-                            bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_BUSY,
-                                         (uint32_t)ctx->current_entry_snapshot_index);
-                        }
-                        if (status.subsystem_flag)
-                        {
-                            bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_SF,
-                                         (uint32_t)ctx->current_entry_snapshot_index);
-                        }
-                        if (status.terminal_flag)
-                        {
-                            bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_TF,
-                                         (uint32_t)ctx->current_entry_snapshot_index);
-                        }
- 
-                        if (ctx->response_data_words_expected > 0U)
-                        {
-                            ctx->response_stage = 1U;
-                        }
-                        else if (ctx->response_is_rt_to_rt)
-                        {
-                            // no data words but RT-RT still owes a second status (zero-length transfer) 
-                            ctx->response_stage = 2U;
-                        }
-                        else
-                        {
-                            ctx->consecutive_fail_count[bc_channel_index(ctx->current_message_bus)] = 0U;
-                            ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
-                        }
-                    }
-                }
-                else if (ctx->response_stage == 1U)
-                {
-                    // expect a data word 
-                    ctx->response_data_words_received++;
-                    if (ctx->response_data_words_received >= ctx->response_data_words_expected)
-                    {
-                        if (ctx->response_is_rt_to_rt)
-                        {
-                            ctx->response_stage = 2U;
-                        }
-                        else
-                        {
-                            ctx->consecutive_fail_count[bc_channel_index(ctx->current_message_bus)] = 0U;
-                            ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
-                        }
-                    }
-                    // else remain in stage 1, awaiting more data words 
+                                 (uint32_t)ctx->current_entry_snapshot_index);
+                    ctx->state = MIL1553_BC_STATE_TIMEOUT;
                 }
                 else
                 {
-                    // response_stage == 2: RT-RT secondary status 
-                    mil1553_status_fields_t status2;
-                    mil1553_word_unpack_status(decoded.field, &status2);
- 
-                    if ((status2.rt_address != ctx->response_secondary_rt) || status2.message_error)
+                    if (status.busy)
                     {
-                        bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_ADDRESS_MISMATCH,
+                        bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_BUSY,
                                      (uint32_t)ctx->current_entry_snapshot_index);
-                        ctx->state = MIL1553_BC_STATE_TIMEOUT;
+                    }
+                    if (status.subsystem_flag)
+                    {
+                        bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_SF,
+                                     (uint32_t)ctx->current_entry_snapshot_index);
+                    }
+                    if (status.terminal_flag)
+                    {
+                        bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_TF,
+                                     (uint32_t)ctx->current_entry_snapshot_index);
+                    }
+
+                    if (ctx->response_data_words_expected > 0U)
+                    {
+                        ctx->response_stage = 1U;
+                    }
+                    else if (ctx->response_is_rt_to_rt)
+                    {
+                        // no data words but RT-RT still owes a second status (zero-length transfer)
+                        ctx->response_stage = 2U;
                     }
                     else
                     {
-                        ctx->consecutive_fail_count[bc_channel_index(ctx->current_message_bus)] = 0U;
-                        ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
+                        bc_message_succeeded(ctx);
                     }
                 }
             }
+            else if (ctx->response_stage == 1U)
+            {
+                // expect a data word
+                ctx->response_data_words_received++;
+                if (ctx->response_data_words_received >= ctx->response_data_words_expected)
+                {
+                    if (ctx->response_is_rt_to_rt)
+                    {
+                        ctx->response_stage = 2U;
+                    }
+                    else
+                    {
+                        bc_message_succeeded(ctx);
+                    }
+                }
+                // else remain in stage 1, awaiting more data words
+            }
             else
             {
-                mil1553_time_us_t elapsed = (mil1553_time_us_t)(bc_now(ctx) - ctx->last_activity_end_us);
- 
-                if (elapsed >= (mil1553_time_us_t)MIL1553_T_NORESP_US)
-                {
-                    // implements: LLR-1553-ERR-003: a stall in the middle of the data phase means fewer valid data words
-                    // arrived than the command word count promised; a stall before any status is a plain no-response
-                    bool short_data = (ctx->response_stage == 1U) &&
-                                      (ctx->response_data_words_received < ctx->response_data_words_expected);
+                // response_stage == 2: RT-RT secondary status
+                mil1553_status_fields_t status2;
+                mil1553_word_unpack_status(decoded.field, &status2);
 
-                    bc_log_error(ctx, ctx->current_message_bus,
-                                 short_data ? MIL1553_ERR_WORD_COUNT_MISMATCH : MIL1553_ERR_NO_RESPONSE,
+                if (status2.rt_address != ctx->response_secondary_rt)
+                {
+                    bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_ADDRESS_MISMATCH,
                                  (uint32_t)ctx->current_entry_snapshot_index);
-                    // the gap (LLR-1553-BC-008) runs from the timeout expiry
-                    ctx->last_activity_end_us = (mil1553_time_us_t)(ctx->last_activity_end_us + MIL1553_T_NORESP_US);
                     ctx->state = MIL1553_BC_STATE_TIMEOUT;
                 }
-                // else: still within the response window, keep waiting 
+                else if (status2.message_error)
+                {
+                    bc_log_error(ctx, ctx->current_message_bus, MIL1553_ERR_STATUS_ME,
+                                 (uint32_t)ctx->current_entry_snapshot_index);
+                    ctx->state = MIL1553_BC_STATE_TIMEOUT;
+                }
+                else
+                {
+                    bc_message_succeeded(ctx);
+                }
             }
-            break;
         }
- 
-        case MIL1553_BC_STATE_TIMEOUT:
+        else
         {
-            uint8_t idx = bc_channel_index(ctx->current_message_bus);
-            const mil1553_bc_schedule_entry_t *e = &ctx->schedule.entries[ctx->current_entry_snapshot_index];
- 
-            ctx->consecutive_fail_count[idx]++;
- 
-            if (ctx->consecutive_fail_count[idx] >= ctx->fail_threshold)
+            mil1553_time_us_t elapsed = (mil1553_time_us_t)(bc_now(ctx) - ctx->last_activity_end_us);
+
+            if (elapsed >= (mil1553_time_us_t)MIL1553_T_NORESP_US)
             {
-                // implements: LLR-1553-REDUN-002 
-                ctx->primary_bus = bc_alternate_channel(ctx->primary_bus);
-                ctx->consecutive_fail_count[0] = 0U;
-                ctx->consecutive_fail_count[1] = 0U;
-                ctx->degraded_indication = true;
-                ctx->retry_used_for_current_message = false;
-                ctx->state = MIL1553_BC_STATE_DEGRADED;
+                // implements: LLR-1553-ERR-003: a stall in the middle of the data phase means fewer valid data words
+                // arrived than the command word count promised; a stall before any status is a plain no-response
+                bool short_data = (ctx->response_stage == 1U) &&
+                                  (ctx->response_data_words_received < ctx->response_data_words_expected);
+
+                bc_log_error(ctx, ctx->current_message_bus,
+                             short_data ? MIL1553_ERR_WORD_COUNT_MISMATCH : MIL1553_ERR_NO_RESPONSE,
+                             (uint32_t)ctx->current_entry_snapshot_index);
+                // the gap (LLR-1553-BC-008) runs from the timeout expiry
+                ctx->last_activity_end_us = (mil1553_time_us_t)(ctx->last_activity_end_us + MIL1553_T_NORESP_US);
+                ctx->state = MIL1553_BC_STATE_TIMEOUT;
             }
-            else if ((!ctx->retry_used_for_current_message) &&
-                     (!bus_model_is_channel_failed(ctx->bus, bc_alternate_channel(ctx->current_message_bus))))
-            {
-                ctx->state = MIL1553_BC_STATE_FAILOVER;
-            }
-            else
-            {
-                // implements: LLR-1553-REDUN-003 
-                bc_mark_rt_failed(ctx, e);
-                ctx->retry_used_for_current_message = false;
-                ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
-            }
-            break;
+            // else: still within the response window, keep waiting
         }
- 
-        case MIL1553_BC_STATE_FAILOVER:
-        {
-            // implements: LLR-1553-REDUN-001 
-            const mil1553_bc_schedule_entry_t *e = &ctx->schedule.entries[ctx->current_entry_snapshot_index];
- 
-            ctx->retry_used_for_current_message = true;
-            ctx->current_message_bus = bc_alternate_channel(ctx->current_message_bus);
- 
-            bus_model_advance_us(ctx->bus, (mil1553_time_us_t)MIL1553_T_GAP_MIN_US);
-            bc_issue_message(ctx, e, ctx->current_message_bus);
-            ctx->message_start_time_us = bc_now(ctx);
-            ctx->last_activity_end_us = ctx->message_start_time_us;
-            bc_begin_response_tracking(ctx, e);
- 
-            ctx->state = MIL1553_BC_STATE_WAIT_RESPONSE;
-            break;
-        }
- 
-        default:
-            // MIL1553_BC_STATE_IDLE handled above; unreachable here
-            break;
+        break;
     }
- 
+
+    case MIL1553_BC_STATE_TIMEOUT:
+    {
+        uint8_t idx = bc_channel_index(ctx->current_message_bus);
+        const mil1553_bc_schedule_entry_t *e = &ctx->schedule.entries[ctx->current_entry_snapshot_index];
+
+        ctx->consecutive_fail_count[idx]++;
+
+        if (ctx->consecutive_fail_count[idx] >= ctx->fail_threshold)
+        {
+            // implements: LLR-1553-REDUN-002
+            ctx->primary_bus = bc_alternate_channel(ctx->primary_bus);
+            ctx->consecutive_fail_count[0] = 0U;
+            ctx->consecutive_fail_count[1] = 0U;
+            ctx->degraded_indication = true;
+            ctx->retry_used_for_current_message = false;
+            ctx->state = MIL1553_BC_STATE_DEGRADED;
+        }
+        else if ((!ctx->retry_used_for_current_message) &&
+                 (!bus_model_is_channel_failed(ctx->bus, bc_alternate_channel(ctx->current_message_bus))))
+        {
+            ctx->state = MIL1553_BC_STATE_FAILOVER;
+        }
+        else
+        {
+            // implements: LLR-1553-REDUN-003
+            bc_mark_rt_failed(ctx, e);
+            ctx->retry_used_for_current_message = false;
+            ctx->state = MIL1553_BC_STATE_MINOR_FRAME;
+        }
+        break;
+    }
+
+    case MIL1553_BC_STATE_FAILOVER:
+    {
+        // implements: LLR-1553-REDUN-001
+        const mil1553_bc_schedule_entry_t *e = &ctx->schedule.entries[ctx->current_entry_snapshot_index];
+
+        ctx->retry_used_for_current_message = true;
+        ctx->current_message_bus = bc_alternate_channel(ctx->current_message_bus);
+
+        bc_wait_gap(ctx); // LLR-1553-BC-008 also applies to the retry
+        bc_issue_message(ctx, e, ctx->current_message_bus);
+        ctx->message_start_time_us = bc_now(ctx);
+        ctx->last_activity_end_us = ctx->message_start_time_us;
+        bc_begin_response_tracking(ctx, e);
+
+        ctx->state = MIL1553_BC_STATE_WAIT_RESPONSE;
+        break;
+    }
+
+    default:
+        // MIL1553_BC_STATE_IDLE handled above; unreachable here
+        break;
+    }
+
     return true;
 }
- 
-// implements: LLR-1553-BC-010 
+
+// implements: LLR-1553-BC-010
 mil1553_bc_state_t bc_get_state(const mil1553_bc_context_t *ctx)
 {
     return ctx->state;
 }
- 
-// implements: LLR-1553-REDUN-002, LLR-1553-REDUN-003 
+
+// implements: LLR-1553-REDUN-002, LLR-1553-REDUN-003
 void bc_get_health(const mil1553_bc_context_t *ctx, mil1553_bc_health_t *out_health)
 {
     uint8_t i;
- 
+
     out_health->degraded = ctx->degraded_indication;
     out_health->primary_bus = ctx->primary_bus;
     out_health->ignored_events = ctx->ignored_event_count;
- 
+
     for (i = 0U; i <= MIL1553_RT_ADDR_MAX; i++)
     {
         out_health->rt_failed[i] = ctx->rt_failed_this_major_frame[i];
