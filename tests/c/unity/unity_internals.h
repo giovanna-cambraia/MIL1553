@@ -12,7 +12,7 @@
 #include "unity_config.h"
 #endif
 
-#ifndef UNITY_EXCLUDE_CONFIG_H
+#ifndef UNITY_EXCLUDE_SETJMP_H
 #include <setjmp.h>
 #endif
 
@@ -48,7 +48,7 @@
   #define UNITY_FUNCTION_ATTR(a)   // ignore 
 #endif
 
-* UNITY_NORETURN is only required if we have setjmp.h. */
+// UNITY_NORETURN is only required if we have setjmp.h
 #ifndef UNITY_EXCLUDE_SETJMP_H
   #ifndef UNITY_NORETURN
     #if defined(__cplusplus)

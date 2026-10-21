@@ -11,7 +11,7 @@
 
 # On MinGW use the make that ships with it (mingw32-make) if `make` is absent
 
-CC      ?= gcc
+CC = gcc
 PYTHON  ?= python3
 ROOT    := ../..
 
