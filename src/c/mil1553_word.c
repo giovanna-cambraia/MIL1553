@@ -5,7 +5,7 @@
 
     MISRA C:2012 notes:
         - no dynamic memory, no recursion, bounded loops only
-        - classify_word is the single predence-ordered implementation
+        - classify_word is the single precedence-ordered implementation
         (SDD 4.2); do not duplicate this logic elsewhere
 */
 
@@ -13,7 +13,7 @@
 #include "manchester.h"
 #include "crc_parity.h"
 
-// bit positions within the 16-it information field, MSB = bit 15
+// bit positions within the 16-bit information field, MSB = bit 15
 #define WORD_CMD_RT_ADDR_SHIFT (11U)
 #define WORD_CMD_TR_SHIFT (10U)
 #define WORD_CMD_SUBADDR_SHIFT (5U)
@@ -83,7 +83,7 @@ uint8_t mil1553_word_decode_word_count(mil1553_word_count_t field_value)
 bool mil1553_word_pack_command(const mil1553_command_fields_t *fields, mil1553_symbols_t out_symbols)
 {
     bool valid;
-    uint16_t packed_fields;
+    uint16_t packed_field;
     uint8_t parity;
 
     valid = (fields->rt_address <= 31U) &&
@@ -96,10 +96,10 @@ bool mil1553_word_pack_command(const mil1553_command_fields_t *fields, mil1553_s
         return false;
     }
 
-    packed_fields = (uint16_t)(((uint16_t)((uint16_t)fields->rt_address & WORD_FIELD_5BIT_MASK) << WORD_CMD_RT_ADDR_SHIFT) |
-                               ((uint16_t)((uint16_t)fields->tr_bit & WORD_FIELD_1BIT_MASK) << WORD_CMD_TR_SHIFT) |
-                               ((uint16_t)((uint16_t)fields->subaddress & WORD_FIELD_5BIT_MASK) << WORD_CMD_SUBADDR_SHIFT) |
-                               ((uint16_t)((uint16_t)fields->word_count_field & WORD_FIELD_5BIT_MASK) << WORD_CMD_WC_SHIFT));
+    packed_field = (uint16_t)(((uint16_t)((uint16_t)fields->rt_address & WORD_FIELD_5BIT_MASK) << WORD_CMD_RT_ADDR_SHIFT) |
+                              ((uint16_t)((uint16_t)fields->tr_bit & WORD_FIELD_1BIT_MASK) << WORD_CMD_TR_SHIFT) |
+                              ((uint16_t)((uint16_t)fields->subaddress & WORD_FIELD_5BIT_MASK) << WORD_CMD_SUBADDR_SHIFT) |
+                              ((uint16_t)((uint16_t)fields->word_count_field & WORD_FIELD_5BIT_MASK) << WORD_CMD_WC_SHIFT));
 
     parity = crc_parity_compute(packed_field);
 
@@ -126,7 +126,7 @@ bool mil1553_word_pack_status(const mil1553_status_fields_t *fields,
 
     if (fields->rt_address > 31U)
     {
-        (void)manchester_encode_word(MIL1553_SYNC_INVALID, 0U, 0U, out_symbols);
+        (void)mil1553_manchester_encode_word(MIL1553_SYNC_INVALID, 0U, 0U, out_symbols);
         return false;
     }
 
@@ -143,7 +143,7 @@ bool mil1553_word_pack_status(const mil1553_status_fields_t *fields,
 
     parity = crc_parity_compute(packed_field);
 
-    return manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
+    return mil1553_manchester_encode_word(MIL1553_SYNC_COMMAND_STATUS, packed_field, parity, out_symbols);
 }
 
 // implements: LLR-1553-WORD-003
@@ -166,14 +166,14 @@ void mil1553_word_unpack_status(uint16_t field, mil1553_status_fields_t *out_fie
 // data word, LLR-1553-WORD-004
 
 // implements: LLR-1553-WORD-004
-void mil1553_word_pack_data(mil1553_data_t value, mil1553_symbols_t out_symbols);
+void mil1553_word_pack_data(mil1553_data_t value, mil1553_symbols_t out_symbols)
 {
     uint8_t parity = crc_parity_compute((uint16_t)value);
 
     (void)mil1553_manchester_encode_word(MIL1553_SYNC_DATA, (uint16_t)value, parity, out_symbols);
 }
 
-// implements: LLR-1553_WORD-004
+// implements: LLR-1553-WORD-004
 mil1553_data_t mil1553_word_unpack_data(uint16_t field)
 {
     return (mil1553_data_t)field;
@@ -181,7 +181,7 @@ mil1553_data_t mil1553_word_unpack_data(uint16_t field)
 
 // classification, LLR-1553-WORD-008
 
-// implements: LLR-1553-008
+// implements: LLR-1553-WORD-008
 mil1553_word_class_t mil1553_word_classify(const mil1553_symbols_t in_symbols, mil1553_decoded_word_t *out_decoded)
 {
     mil1553_sync_t sync;
@@ -190,7 +190,7 @@ mil1553_word_class_t mil1553_word_classify(const mil1553_symbols_t in_symbols, m
     bool violation;
     mil1553_word_class_t result;
 
-    (void)manchester_decode_word(in_symbols, &sync, &field, &parity, &violation);
+    (void)mil1553_manchester_decode_word(in_symbols, &sync, &field, &parity, &violation);
 
     out_decoded->sync = sync;
     out_decoded->field = field;
