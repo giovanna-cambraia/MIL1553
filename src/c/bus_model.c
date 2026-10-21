@@ -6,17 +6,19 @@
     see bus_model_types.h for the multicast ring-log design rationale
 
     design notes:
-        - this is the interposition point for error_inject's word-corrupting and response-suppresion/delay fault primitives in the test build (SDD 4.5);
-        in THIS file (the release build source), there is no hook table, no weak symbol, and no conditional branch referencing errinject, the hook mechanism is added
-        by a *separate* test-build translation unit (under src/c/errinject/, wrritten in that module's own increment) that provides an alternate definition of
-        bus_model_transmit compiled instead of this one, selected by the build system (CMakeLists.tsx), never by a runtime branch in this file; this is what LLR-1553-ERR-005
-        requires: release object code contains no errinject-reachable path, not merely a disabled one
+        - the public bus_model_transmit is NOT defined in this file; this file defines bus_model_transmit_raw (the real enqueue);
+        the public entry point is defined by exactly one of two translation units, chosen by the build system, never by a runtime branch:
+            release : src/c/bus_model_tx.c - forwards to the raw function
+            test    : src/c/errinject/bus_model_tx_hooked.c - applies the error injector's filter, then calls the raw function
+        consequently nothing in this file, nor in the release build, can reference error injection (LLR-1553-ERR-005): the release
+        object code contains no hook table, no weak symbol and no branch that could reach the injector
 
-        MISRA C:2012 notes:
-            - fixed capacity ring log, fixed per-listener cursor arrays, no dynamic memory, bounded loops only
+    MISRA C:2012 notes:
+        - fixed capacity ring log, fixed per-listener cursor arrays, no dynamic memory, bounded loops only
 */
 
 #include "bus_model.h"
+#include "bus_model_internal.h"
 
 static mil1553_bus_channel_state_t *bus_model_channel_state(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel)
 {
@@ -30,7 +32,7 @@ static const mil1553_bus_channel_state_t *bus_model_channel_state_const(const mi
 
 static uint8_t bus_model_channel_index(mil1553_channel_t channel)
 {
-    return (channel == MIL1553_CHANNEL_A) ? 0U : 1U;
+    return (uint8_t)((channel == MIL1553_CHANNEL_A) ? 0U : 1U);
 }
 
 // implements: LLR-1553-BUS-001, LLR-1553-BUS-003
@@ -44,7 +46,7 @@ void bus_model_init(mil1553_bus_model_context_t *ctx)
         ctx->channel[c].total_written = 0U;
         ctx->channel[c].failed = false;
 
-        for (l = 0U; l < BUS_MODEL_CHANNEL_COUNT; c++)
+        for (l = 0U; l < BUS_MODEL_LISTENER_COUNT; l++)
         {
             ctx->listener_read_count[c][l] = 0U;
             ctx->listener_dropped_count[c][l] = 0U;
@@ -57,7 +59,7 @@ void bus_model_init(mil1553_bus_model_context_t *ctx)
 }
 
 // implements: LLR-1553-BUS-001, LLR-1553-BUS-002
-bool bus_model_transmit(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, const mil1553_symbols_t symbols, mil1553_terminal_id_t sender)
+bool bus_model_transmit_raw(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, const mil1553_symbols_t symbols, mil1553_terminal_id_t sender)
 {
     mil1553_bus_channel_state_t *ch = bus_model_channel_state(ctx, channel);
     uint32_t insert_index;
@@ -69,6 +71,7 @@ bool bus_model_transmit(mil1553_bus_model_context_t *ctx, mil1553_channel_t chan
     }
 
     insert_index = ch->total_written % BUS_MODEL_QUEUE_CAPACITY;
+
     for (k = 0U; k < 5U; k++)
     {
         ch->records[insert_index].symbols[k] = symbols[k];
@@ -85,7 +88,7 @@ bool bus_model_transmit(mil1553_bus_model_context_t *ctx, mil1553_channel_t chan
     implements: LLR-1553-BUS-001, LLR-1553-BUS-002
 
     advances listener_id's cursor past its own transmissions and past any records it has irrecoverably fallen behind on, returning the next record it has not seen and did
-    not send; bounded by BUS_MODEL_QUEUE_CAPACITY iterations (MISRA: bounded loop; a listener can be behind by at most one full ring's worth of records before being 
+    not send; bounded by BUS_MODEL_QUEUE_CAPACITY iterations (MISRA: bounded loop; a listener can be behind by at most one full ring's worth of records before being
     snapped forward)
 */
 bool bus_model_receive(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, mil1553_terminal_id_t listener_id, mil1553_bus_record_t *out_record)
@@ -127,7 +130,7 @@ bool bus_model_receive(mil1553_bus_model_context_t *ctx, mil1553_channel_t chann
             if (rec->sender != listener_id)
             {
                 uint8_t k;
-                
+
                 out_record->timestamp_us = rec->timestamp_us;
                 out_record->sender = rec->sender;
                 for (k = 0U; k < 5U; k++)
@@ -136,7 +139,7 @@ bool bus_model_receive(mil1553_bus_model_context_t *ctx, mil1553_channel_t chann
                 }
                 return true;
             }
-            // else: this listemer's own transmission, skip - loop again 
+            // else: this listener's own transmission, skip - loop again
         }
     }
 
@@ -198,7 +201,7 @@ void bus_model_set_channel_failed(mil1553_bus_model_context_t *ctx, mil1553_chan
     if (failed)
     {
         // a failed channel delivers nothing (LLR-1553-BUS-001): snap every listener's cursor to the current write position so no backlog is delivered once failed, and
-        // none is replayed when later restored 
+        // none is replayed when later restored
         uint8_t l;
         for (l = 0U; l < BUS_MODEL_LISTENER_COUNT; l++)
         {
