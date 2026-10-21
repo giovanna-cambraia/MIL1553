@@ -87,6 +87,9 @@ mil1553_time_us_t bus_model_now_us(const mil1553_bus_model_context_t *ctx);
 */
 void bus_model_advance_us(mil1553_bus_model_context_t *ctx, mil1553_time_us_t delta_us);
 
+// implements: LLR-1553-BUS-001
+bool bus_model_is_channel_failed(const mil1553_bus_model_context_t *ctx, mil1553_channel_t channel);
+
 #ifdef __cplusplus
 }
 #endif

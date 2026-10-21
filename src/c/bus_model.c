@@ -44,7 +44,7 @@ void bus_model_init(mil1553_bus_model_context_t *ctx)
         ctx->channel[c].total_written = 0U;
         ctx->channel[c].failed = false;
 
-        for (l = 0U; c < BUS_MODEL_CHANNEL_COUNT; c++)
+        for (l = 0U; l < BUS_MODEL_CHANNEL_COUNT; c++)
         {
             ctx->listener_read_count[c][l] = 0U;
             ctx->listener_dropped_count[c][l] = 0U;
@@ -119,7 +119,7 @@ bool bus_model_receive(mil1553_bus_model_context_t *ctx, mil1553_channel_t chann
         }
 
         {
-            uint32_t slot = read_pos & BUS_MODEL_QUEUE_CAPACITY;
+            uint32_t slot = read_pos % BUS_MODEL_QUEUE_CAPACITY;
             const mil1553_bus_record_t *rec = &ch->records[slot];
 
             ctx->listener_read_count[ch_idx][l_idx] = read_pos + 1U;
