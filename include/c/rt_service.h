@@ -89,7 +89,37 @@ typedef struct {
     bool                       pending_rt_to_rt_status_pending; // awaiting xmit RT status
     mil1553_rt_addr_t          pending_rt_to_rt_xmit_addr;
     mil1553_time_us_t          pending_rt_to_rt_wait_start_us;
-    mil1553_time_us_t          message_end_time_us;           // end of last received word
+
+    // end of the last word received for the in-progress message, in bus time; the response delay (LLR-1553-RT-005) runs from here,
+    // not from whenever the RT happens to be scheduled
+    mil1553_time_us_t          pending_last_word_end_us;
+
+    // data words are staged here and copied into the subaddress buffer only when all of them have arrived valid (LLR-1553-RT-003)
+    mil1553_data_t             staging[MIL1553_MAX_DATA_WORDS];
+    mil1553_data_t             mode_data_word;     // data word received with a mode command
+
+    // received data is committed (and a data-carrying mode command executed) only when the response is sent, after the RT has
+    // confirmed no extra word followed
+    bool                       commit_pending;
+
+    // a word read from the bus that belongs to the NEXT message (it interrupted a short message, or followed the end of one) is
+    // replayed instead of being lost
+    bool                       replay_valid;
+    mil1553_channel_t          replay_channel;
+    mil1553_bus_record_t       replay_record;
+
+    // mode command state, LLR-1553-RT-008 / RT-013
+    bool                       fail_safe;           // latched until a reset mode command / rt_reset
+    bool                       reset_pending;       // reset mode command accepted: reset after its status
+    bool                       tf_inhibited;        // inhibit terminal flag (mode codes 6/7)
+    bool                       transmitter_shutdown[BUS_MODEL_CHANNEL_COUNT]; // mode codes 4/5
+    bool                       self_test_requested; // initiate self-test (mode code 3)
+    uint32_t                   sync_count;          // synchronize commands handled (mode codes 1/17)
+    mil1553_data_t             last_sync_data;      // data word of the last synchronize-with-data
+    mil1553_data_t             vector_word;         // returned by transmit vector word (mode code 16)
+    uint16_t                   latest_command_field;  // last command word accepted
+    uint16_t                   last_command_field;    // the one before it (mode code 18 returns this)
+    mil1553_time_us_t          message_end_time_us; // end of last received word
 
     mil1553_error_record_t error_log[MIL1553_ERROR_LOG_CAPACITY]; // LLR-1553-ERR-004
     uint8_t  error_log_count;
@@ -125,6 +155,17 @@ bool rt_enable(mil1553_rt_context_t *ctx);
 
 // implements: LLR-1553-RT-013 (any state -> RESET, e.g. reset mode command)
 void rt_reset(mil1553_rt_context_t *ctx);
+
+/*
+    implements: LLR-1553-RT-008
+
+    true (once) if an initiate-self-test mode command has been handled since the last call; rt_service does not
+    depend on the BIT modules; the role's main loop polls this and runs bit_ibit_run when it returns true
+*/
+bool rt_take_self_test_request(mil1553_rt_context_t *ctx);
+
+// implements: LLR-1553-RT-008 - the word returned by transmit-vector-word (code 16)
+void rt_set_vector_word(mil1553_rt_context_t *ctx, mil1553_data_t value);
 
 // subsystem interface, LLR-1553-RT-003/004/006/012
 void rt_set_busy(mil1553_rt_context_t *ctx, bool busy);

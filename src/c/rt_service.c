@@ -20,47 +20,54 @@
 
 // mode code table, per design/mode_code_table.md (LLR-1553-RT-008)
 
+typedef enum {
+    RT_MODE_NONE = 0,            // recognized but not supported
+    RT_MODE_SYNC,                // code 1
+    RT_MODE_TX_STATUS,           // code 2: the status word is the response
+    RT_MODE_SELF_TEST,           // code 3
+    RT_MODE_TX_SHUTDOWN,         // code 4
+    RT_MODE_OVERRIDE_SHUTDOWN,   // code 5
+    RT_MODE_INHIBIT_TF,          // code 6
+    RT_MODE_OVERRIDE_INHIBIT_TF, // code 7
+    RT_MODE_RESET,               // code 8
+    RT_MODE_TX_VECTOR,           // code 16
+    RT_MODE_SYNC_DATA,           // code 17
+    RT_MODE_TX_LAST_COMMAND,     // code 18
+    RT_MODE_TX_BIT               // code 19
+} rt_mode_handler_t;
+
 typedef struct
 {
     bool supported;
     bool has_data_word;
     bool data_from_bc; // true: BC supplies the word; false: RT supplies it
+    rt_mode_handler_t handler;
 } mil1553_rt_mode_entry_t;
 
+#define MODE_UNSUPPORTED { false, false, false, RT_MODE_NONE }
+
 static const mil1553_rt_mode_entry_t RT_MODE_TABLE[32] = {
-    /*  0 */ {false, false, false}, // Dynamic Bus Control - recognized, unsupported (mode_code_table.md 3)
-    /*  1 */ {true, false, false},  // Synchronize, no data
-    /*  2 */ {true, false, false},  // Transmit Status Word
-    /*  3 */ {true, false, false},  // Initiate Self-Test
-    /*  4 */ {true, false, false},  // Transmitter Shutdown
-    /*  5 */ {true, false, false},  // Override Transmitter Shutdown
-    /*  6 */ {true, false, false},  // Inhibit Terminal Flag
-    /*  7 */ {true, false, false},  // Override Inhibit Terminal Flag
-    /*  8 */ {true, false, false},  // Reset Remote Terminal
-    /*  9 */ {false, false, false},
-    /* 10 */ {false, false, false},
-    /* 11 */ {false, false, false},
-    /* 12 */ {false, false, false},
-    /* 13 */ {false, false, false},
-    /* 14 */ {false, false, false},
-    /* 15 */ {false, false, false},
-    /* 16 */ {true, true, false}, // Transmit Vector Word
-    /* 17 */ {true, true, true},  // Synchronize, with data
-    /* 18 */ {true, true, false}, // Transmit Last Command
-    /* 19 */ {true, true, false}, // Transmit BIT Word
-    /* 20..31 */
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false},
-    {false, false, false}};
+    /*  0 */ MODE_UNSUPPORTED,                                    // Dynamic Bus Control - recognized, unsupported (mode_code_table.md 3)
+    /*  1 */ { true, false, false, RT_MODE_SYNC },               // Synchronize, no data
+    /*  2 */ { true, false, false, RT_MODE_TX_STATUS },          // Transmit Status Word
+    /*  3 */ { true, false, false, RT_MODE_SELF_TEST },          // Initiate Self-Test
+    /*  4 */ { true, false, false, RT_MODE_TX_SHUTDOWN },        // Transmitter Shutdown
+    /*  5 */ { true, false, false, RT_MODE_OVERRIDE_SHUTDOWN },  // Override Transmitter Shutdown
+    /*  6 */ { true, false, false, RT_MODE_INHIBIT_TF },         // Inhibit Terminal Flag
+    /*  7 */ { true, false, false, RT_MODE_OVERRIDE_INHIBIT_TF },// Override Inhibit Terminal Flag
+    /*  8 */ { true, false, false, RT_MODE_RESET },              // Reset Remote Terminal
+    /*  9 */ MODE_UNSUPPORTED, /* 10 */ MODE_UNSUPPORTED, /* 11 */ MODE_UNSUPPORTED,
+    /* 12 */ MODE_UNSUPPORTED, /* 13 */ MODE_UNSUPPORTED, /* 14 */ MODE_UNSUPPORTED,
+    /* 15 */ MODE_UNSUPPORTED,
+    /* 16 */ { true, true, false, RT_MODE_TX_VECTOR },           // Transmit Vector Word
+    /* 17 */ { true, true, true, RT_MODE_SYNC_DATA },            // Synchronize, with data
+    /* 18 */ { true, true, false, RT_MODE_TX_LAST_COMMAND },     // Transmit Last Command
+    /* 19 */ { true, true, false, RT_MODE_TX_BIT },              // Transmit BIT Word
+    /* 20 */ MODE_UNSUPPORTED, /* 21 */ MODE_UNSUPPORTED, /* 22 */ MODE_UNSUPPORTED,
+    /* 23 */ MODE_UNSUPPORTED, /* 24 */ MODE_UNSUPPORTED, /* 25 */ MODE_UNSUPPORTED,
+    /* 26 */ MODE_UNSUPPORTED, /* 27 */ MODE_UNSUPPORTED, /* 28 */ MODE_UNSUPPORTED,
+    /* 29 */ MODE_UNSUPPORTED, /* 30 */ MODE_UNSUPPORTED, /* 31 */ MODE_UNSUPPORTED
+};
 
 // internal helpers
 
@@ -96,13 +103,149 @@ static void rt_fail_message(mil1553_rt_context_t *ctx, mil1553_error_type_t erro
     rt_log_error(ctx, ctx->pending_channel, error_type, 0U);
     ctx->message_error_latched = true;
     ctx->pending_transmission_error = true;
+    ctx->commit_pending = false;
     ctx->state = MIL1553_RT_STATE_ERROR;
+}
+
+static uint8_t rt_channel_index(mil1553_channel_t channel)
+{
+    return (uint8_t)((channel == MIL1553_CHANNEL_A) ? 0U : 1U);
 }
 
 static void rt_transmit_word(mil1553_rt_context_t *ctx, const mil1553_symbols_t symbols)
 {
+    if (ctx->transmitter_shutdown[rt_channel_index(ctx->pending_channel)])
+    {
+        return; // implements: LLR-1553-RT-008: transmitter shut down on this channel
+    }
     (void)bus_model_transmit(ctx->bus, ctx->pending_channel, symbols, ctx->own_terminal_id);
     bus_model_advance_us(ctx->bus, (mil1553_time_us_t)MIL1553_WORD_TIME_US);
+}
+
+// implements: LLR-1553-RT-008: the data word a transmit-type mode command returns
+static mil1553_data_t rt_mode_response_word(const mil1553_rt_context_t *ctx)
+{
+    mil1553_data_t value;
+
+    switch (RT_MODE_TABLE[ctx->pending_cmd.word_count_field & 0x1FU].handler)
+    {
+        case RT_MODE_TX_VECTOR:
+            value = ctx->vector_word;
+            break;
+        case RT_MODE_TX_LAST_COMMAND:
+            value = (mil1553_data_t)ctx->last_command_field;
+            break;
+        case RT_MODE_TX_BIT:
+            // the latched BIT result: bit 0 terminal flag, bit 1 subsystem flag
+            value = (mil1553_data_t)((ctx->terminal_flag ? 1U : 0U) | (ctx->subsystem_flag ? 2U : 0U));
+            break;
+        default:
+            value = 0U;
+            break;
+    }
+    return value;
+}
+
+// A word that belongs to the next message is kept, not discarded.
+static void rt_replay(mil1553_rt_context_t *ctx, mil1553_channel_t ch, const mil1553_bus_record_t *rec)
+{
+    ctx->replay_record = *rec;
+    ctx->replay_channel = ch;
+    ctx->replay_valid = true;
+}
+
+// The next word on a channel for this RT: a replayed word first, else the bus.
+static bool rt_next_word(mil1553_rt_context_t *ctx, mil1553_channel_t ch, mil1553_bus_record_t *rec)
+{
+    bool got;
+
+    if (ctx->replay_valid && (ctx->replay_channel == ch))
+    {
+        *rec = ctx->replay_record;
+        ctx->replay_valid = false;
+        got = true;
+    }
+    else
+    {
+        got = bus_model_receive(ctx->bus, ch, ctx->own_terminal_id, rec);
+    }
+    return got;
+}
+
+// implements: LLR-1553-RT-008 (handler dispatch), LLR-1553-RT-013 (reset)
+static void rt_execute_mode_command(mil1553_rt_context_t *ctx, mil1553_data_t data)
+{
+    // transmitter shutdown commands act on the bus the command did NOT arrive on
+    uint8_t other = (uint8_t)((ctx->pending_channel == MIL1553_CHANNEL_A) ? 1U : 0U);
+
+    switch (RT_MODE_TABLE[ctx->pending_cmd.word_count_field & 0x1FU].handler)
+    {
+        case RT_MODE_SYNC:
+            ctx->sync_count++;
+            break;
+        case RT_MODE_SYNC_DATA:
+            ctx->sync_count++;
+            ctx->last_sync_data = data;
+            break;
+        case RT_MODE_SELF_TEST:
+            ctx->self_test_requested = true;
+            break;
+        case RT_MODE_TX_SHUTDOWN:
+            ctx->transmitter_shutdown[other] = true;
+            break;
+        case RT_MODE_OVERRIDE_SHUTDOWN:
+            ctx->transmitter_shutdown[other] = false;
+            break;
+        case RT_MODE_INHIBIT_TF:
+            ctx->tf_inhibited = true;
+            break;
+        case RT_MODE_OVERRIDE_INHIBIT_TF:
+            ctx->tf_inhibited = false;
+            break;
+        case RT_MODE_RESET:
+            ctx->reset_pending = true; // performed once the status word has been sent
+            break;
+        default:
+            break; // transmit-type codes act through the response word
+    }
+}
+
+// implements: LLR-1553-RT-003: the whole block has arrived valid and no extra word
+// followed, so it is committed now (or the data-carrying mode command executed).
+static void rt_commit_received(mil1553_rt_context_t *ctx)
+{
+    if (ctx->pending_is_mode_code)
+    {
+        ctx->mode_data_word = ctx->staging[0];
+        rt_execute_mode_command(ctx, ctx->mode_data_word);
+    }
+    else
+    {
+        uint8_t k;
+        mil1553_rt_subaddr_buffer_t *buf = &ctx->subaddr_buffer[ctx->pending_cmd.subaddress];
+
+        for (k = 0U; k < ctx->pending_data_received; k++)
+        {
+            buf->words[k] = ctx->staging[k];
+        }
+        buf->word_count = ctx->pending_data_received;
+    }
+    ctx->commit_pending = false;
+}
+
+// implements: LLR-1553-RT-013: a message is over; honour a pending reset, else
+// return to WAIT_COMMAND (or stay in FAIL_SAFE, which only a reset leaves).
+static void rt_finish_message(mil1553_rt_context_t *ctx)
+{
+    ctx->message_end_time_us = 0U;
+    if (ctx->reset_pending)
+    {
+        rt_reset(ctx);
+    }
+    else
+    {
+        ctx->state = ctx->fail_safe ? MIL1553_RT_STATE_FAIL_SAFE : MIL1553_RT_STATE_WAIT_COMMAND;
+    }
 }
 
 // implements: LLR-1553-RT-006
@@ -120,7 +263,8 @@ static void rt_build_and_send_status(mil1553_rt_context_t *ctx, bool suppress_da
     status.busy = ctx->subsystem_busy;
     status.subsystem_flag = ctx->subsystem_flag;
     status.dbc_acceptance = false; // Dynamic Bus Control not implemented, SDD 4.6
-    status.terminal_flag = ctx->terminal_flag;
+    // TF: BIT-driven, suppressed by inhibit-TF (mode 6), forced on in FAIL_SAFE (RT-013)
+    status.terminal_flag = (ctx->terminal_flag && (!ctx->tf_inhibited)) || ctx->fail_safe;
 
     (void)mil1553_word_pack_status(&status, symbols);
     rt_transmit_word(ctx, symbols);
@@ -133,24 +277,17 @@ static void rt_build_and_send_status(mil1553_rt_context_t *ctx, bool suppress_da
             mil1553_symbols_t data_symbols;
             mil1553_data_t value;
 
-            if ((ctx->pending_cmd.subaddress < RT_SUBADDRESS_COUNT) && (!ctx->pending_is_mode_code) &&
-                (i < ctx->subaddr_buffer[ctx->pending_cmd.subaddress].word_count))
+            if (ctx->pending_is_mode_code)
+            {
+                value = rt_mode_response_word(ctx);
+            }
+            else if (i < ctx->subaddr_buffer[ctx->pending_cmd.subaddress].word_count)
             {
                 value = ctx->subaddr_buffer[ctx->pending_cmd.subaddress].words[i];
             }
             else
             {
-                // mode code 16/18/19 or an otherwise unbacked index: placeholder/BIT-sourced content, see file header note;
-                // mode 19 (Transmit BIT Word): encode the latched BIT flags into bit 0 (terminal_flag) / bit 1 (subsystem_flag) -
-                // genuine content, not placeholder
-                if (ctx->pending_is_mode_code && (ctx->pending_cmd.word_count_field == 19U))
-                {
-                    value = (mil1553_data_t)((ctx->terminal_flag ? 1U : 0U) | (ctx->subsystem_flag ? 2U : 0U));
-                }
-                else
-                {
-                    value = (mil1553_data_t)i; // placeholder
-                }
+                value = 0U; // the subaddress buffer holds fewer words than commanded
             }
 
             mil1553_word_pack_data(value, data_symbols);
@@ -198,6 +335,21 @@ bool rt_init(mil1553_rt_context_t *ctx, mil1553_rt_addr_t own_address, mil1553_t
     ctx->pending_rt_to_rt_status_pending = false;
     ctx->pending_rt_to_rt_xmit_addr = 0U;
     ctx->pending_rt_to_rt_wait_start_us = 0U;
+    ctx->pending_last_word_end_us = 0U;
+    ctx->mode_data_word = 0U;
+    ctx->commit_pending = false;
+    ctx->replay_valid = false;
+    ctx->fail_safe = false;
+    ctx->reset_pending = false;
+    ctx->tf_inhibited = false;
+    ctx->transmitter_shutdown[0] = false;
+    ctx->transmitter_shutdown[1] = false;
+    ctx->self_test_requested = false;
+    ctx->sync_count = 0U;
+    ctx->last_sync_data = 0U;
+    ctx->vector_word = 0U;
+    ctx->latest_command_field = 0U;
+    ctx->last_command_field = 0U;
     ctx->pending_data_expected = 0U;
     ctx->pending_data_received = 0U;
     ctx->pending_data_to_send = 0U;
@@ -217,6 +369,7 @@ void rt_attach_cbit(mil1553_rt_context_t *ctx, mil1553_bit_cbit_context_t *cbit)
 
 void rt_pbit_complete(mil1553_rt_context_t *ctx, bool passed)
 {
+    ctx->fail_safe = !passed;
     ctx->state = passed ? MIL1553_RT_STATE_IDLE : MIL1553_RT_STATE_FAIL_SAFE;
 }
 
@@ -235,6 +388,33 @@ void rt_reset(mil1553_rt_context_t *ctx)
     ctx->state = MIL1553_RT_STATE_RESET;
     ctx->message_error_latched = false;
     ctx->broadcast_received_latched = false;
+    ctx->terminal_flag = false;          // PBIT re-evaluates it
+    ctx->fail_safe = false;
+    ctx->reset_pending = false;
+    ctx->tf_inhibited = false;
+    ctx->transmitter_shutdown[0] = false;
+    ctx->transmitter_shutdown[1] = false;
+    ctx->pending_transmission_error = false;
+    ctx->pending_data_expected = 0U;
+    ctx->pending_data_received = 0U;
+    ctx->pending_data_to_send = 0U;
+    ctx->message_end_time_us = 0U;
+    ctx->commit_pending = false;
+    ctx->replay_valid = false;
+}
+
+// implements: LLR-1553-RT-008
+bool rt_take_self_test_request(mil1553_rt_context_t *ctx)
+{
+    bool requested = ctx->self_test_requested;
+    ctx->self_test_requested = false;
+    return requested;
+}
+
+// implements: LLR-1553-RT-008
+void rt_set_vector_word(mil1553_rt_context_t *ctx, mil1553_data_t value)
+{
+    ctx->vector_word = value;
 }
 
 void rt_set_busy(mil1553_rt_context_t *ctx, bool busy)
@@ -259,6 +439,7 @@ void rt_report_bit_result(mil1553_rt_context_t *ctx, bool fatal, bool set_termin
     }
     if (fatal)
     {
+        ctx->fail_safe = true;
         ctx->state = MIL1553_RT_STATE_FAIL_SAFE; // any state -> FAIL_SAFE, LLR-1553-RT-013
     }
 }
@@ -291,7 +472,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
         for (ch = MIL1553_CHANNEL_A; (ch <= MIL1553_CHANNEL_B) && (!got_word); ch++)
         {
-            if (bus_model_receive(ctx->bus, ch, ctx->own_terminal_id, &record))
+            if (rt_next_word(ctx, ch, &record))
             {
                 got_word = true;
 
@@ -326,20 +507,33 @@ bool rt_run(mil1553_rt_context_t *ctx)
                 {
                     ctx->pending_channel = ch;
                     ctx->pending_cmd = cmd_fields;
+                    ctx->pending_last_word_end_us = (mil1553_time_us_t)(record.timestamp_us + MIL1553_WORD_TIME_US);
+                    if (cls == MIL1553_WORD_VALID)
+                    {
+                        ctx->last_command_field = ctx->latest_command_field;  // mode code 18 returns the one before this
+                        ctx->latest_command_field = decoded.field;
+                    }
                     ctx->pending_is_broadcast = (cmd_fields.rt_address == MIL1553_RT_ADDR_BROADCAST);
                     ctx->pending_is_mode_code = ((cmd_fields.subaddress == 0U) || (cmd_fields.subaddress == 31U));
                     ctx->pending_is_rt_to_rt = false;
                     ctx->pending_rt_to_rt_status_pending = false;
 
-                    // ME latch cleared on next valid command word (LLR-1553-RT-006)
-                    if (cls == MIL1553_WORD_VALID)
+                    // implements: LLR-1553-RT-006. ME clears on the next valid command word and BCR on the next valid
+                    // non-broadcast one - except the transmit-status-word and transmit-last-command mode commands,
+                    // which must report the status as it stands. This is how a BC learns of an error the RT could not answer.
                     {
-                        ctx->message_error_latched = false;
-                    }
-                    // BCR latch cleared on next non-broadcast valid command word
-                    if ((cls == MIL1553_WORD_VALID) && (!ctx->pending_is_broadcast))
-                    {
-                        ctx->broadcast_received_latched = false;
+                        bool preserves_status = ctx->pending_is_mode_code &&
+                            ((RT_MODE_TABLE[cmd_fields.word_count_field & 0x1FU].handler == RT_MODE_TX_STATUS) ||
+                             (RT_MODE_TABLE[cmd_fields.word_count_field & 0x1FU].handler == RT_MODE_TX_LAST_COMMAND));
+
+                        if ((cls == MIL1553_WORD_VALID) && (!preserves_status))
+                        {
+                            ctx->message_error_latched = false;
+                            if (!ctx->pending_is_broadcast)
+                            {
+                                ctx->broadcast_received_latched = false;
+                            }
+                        }
                     }
 
                     if (cls != MIL1553_WORD_VALID)
@@ -359,8 +553,14 @@ bool rt_run(mil1553_rt_context_t *ctx)
                         // FAIL_SAFE short-circuits straight to RESPOND: TF-only status, no execution (LLR-1553-RT-013)
                         if (ctx->state == MIL1553_RT_STATE_RESPOND)
                         {
-                            ctx->message_end_time_us = rt_now(ctx);
+                            ctx->message_end_time_us = ctx->pending_last_word_end_us;
                             ctx->pending_data_to_send = 0U;
+                            // FAIL_SAFE executes nothing except a reset: it is the only way out.
+                            if (ctx->pending_is_mode_code &&
+                                (RT_MODE_TABLE[ctx->pending_cmd.word_count_field & 0x1FU].handler == RT_MODE_RESET))
+                            {
+                                ctx->reset_pending = true;
+                            }
                         }
                     }
                 }
@@ -385,6 +585,15 @@ bool rt_run(mil1553_rt_context_t *ctx)
             break;
         }
 
+        if (ctx->pending_is_broadcast && (!ctx->pending_is_mode_code) &&
+            (ctx->pending_cmd.tr_bit == MIL1553_TR_TRANSMIT))
+        {
+            // implements: LLR-1553-RT-009/011: a broadcast cannot ask for data back
+            ctx->pending_validation = MIL1553_CMD_ILLEGAL_DIRECTION;
+            ctx->state = MIL1553_RT_STATE_ERROR;
+            break;
+        }
+
         if (ctx->pending_is_mode_code)
         {
             uint8_t code = ctx->pending_cmd.word_count_field; // mode code occupies this field
@@ -405,6 +614,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
             {
                 ctx->pending_data_expected = 0U;
                 ctx->pending_data_to_send = (m->has_data_word && (!m->data_from_bc)) ? 1U : 0U;
+                rt_execute_mode_command(ctx, 0U);
                 ctx->state = MIL1553_RT_STATE_EXECUTE;
             }
         }
@@ -456,7 +666,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
         {
             mil1553_bus_record_t record;
 
-            if (bus_model_receive(ctx->bus, ctx->pending_channel, ctx->own_terminal_id, &record))
+            if (rt_next_word(ctx, ctx->pending_channel, &record))
             {
                 mil1553_decoded_word_t decoded;
                 mil1553_word_class_t cls = mil1553_word_classify(record.symbols, &decoded);
@@ -465,6 +675,8 @@ bool rt_run(mil1553_rt_context_t *ctx)
                 {
                     bit_cbit_record_word(ctx->cbit, ctx->pending_channel, cls); // LLR-1553-BIT-005
                 }
+
+                ctx->pending_last_word_end_us = (mil1553_time_us_t)(record.timestamp_us + MIL1553_WORD_TIME_US);
 
                 if (cls != MIL1553_WORD_VALID)
                 {
@@ -520,31 +732,27 @@ bool rt_run(mil1553_rt_context_t *ctx)
                     }
                     else
                     {
+                        // The message ended short and a new command followed at once:
+                        // report the count error, then give the command its own turn.
                         rt_fail_message(ctx, MIL1553_ERR_WORD_COUNT_MISMATCH);
+                        rt_replay(ctx, ctx->pending_channel, &record);
                     }
                 }
                 else
                 {
-                    if ((!ctx->pending_is_mode_code) &&
-                        (ctx->pending_data_received < MIL1553_MAX_DATA_WORDS) &&
-                        (ctx->pending_cmd.subaddress < RT_SUBADDRESS_COUNT))
+                    if (ctx->pending_data_received < MIL1553_MAX_DATA_WORDS)
                     {
-                        /* buffer directly; committed only if the full count completes (LLR-1553-RT-003) - staged
-                           in a temporary via subaddr_buffer itself, word_count updated only on full success
-                           below */
-                        ctx->subaddr_buffer[ctx->pending_cmd.subaddress]
-                            .words[ctx->pending_data_received] = mil1553_word_unpack_data(decoded.field);
+                        // implements: LLR-1553-RT-003: staged, not written into the subaddress buffer until
+                        // every word has arrived.
+                        ctx->staging[ctx->pending_data_received] = mil1553_word_unpack_data(decoded.field);
                     }
                     ctx->pending_data_received++;
 
                     if (ctx->pending_data_received == ctx->pending_data_expected)
                     {
-                        if ((!ctx->pending_is_mode_code) && (ctx->pending_cmd.subaddress < RT_SUBADDRESS_COUNT))
-                        {
-                            ctx->subaddr_buffer[ctx->pending_cmd.subaddress].word_count = ctx->pending_data_received;
-                        }
-                        ctx->message_end_time_us = rt_now(ctx);
-                        ctx->state = ctx->pending_is_broadcast ? MIL1553_RT_STATE_RESPOND /* short-circuited below */ : MIL1553_RT_STATE_RESPOND;
+                        ctx->commit_pending = true; // committed when the response goes out, RT-003
+                        ctx->message_end_time_us = ctx->pending_last_word_end_us;
+                        ctx->state = MIL1553_RT_STATE_RESPOND;
                     }
                     // else: remain in EXECUTE, awaiting more data
                 }
@@ -556,14 +764,22 @@ bool rt_run(mil1553_rt_context_t *ctx)
                 // implements: LLR-1553-RT-007: the transmitting RT never answered; discard, ME set, no status sent
                 rt_fail_message(ctx, MIL1553_ERR_NO_RESPONSE);
             }
+            else if ((!ctx->pending_rt_to_rt_status_pending) &&
+                     ((mil1553_time_us_t)(rt_now(ctx) - ctx->pending_last_word_end_us) >=
+                      (mil1553_time_us_t)MIL1553_T_GAP_MIN_US))
+            {
+                // implements: LLR-1553-RT-003: the words of one message are contiguous; a
+                // gap with words still owed means the message is shorter than commanded.
+                rt_fail_message(ctx, MIL1553_ERR_WORD_COUNT_MISMATCH);
+            }
             else
             {
-                // no word yet this call; remain in EXECUTE and wait (bounded by the BC's own inter-word timing)
+                // the next word is not here yet; remain in EXECUTE
             }
         }
         else
         {
-            ctx->message_end_time_us = rt_now(ctx);
+            ctx->message_end_time_us = ctx->pending_last_word_end_us;
             ctx->state = MIL1553_RT_STATE_RESPOND;
         }
         break;
@@ -571,7 +787,28 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
     case MIL1553_RT_STATE_RESPOND:
     {
-        mil1553_time_us_t elapsed = (mil1553_time_us_t)(rt_now(ctx) - ctx->message_end_time_us);
+        mil1553_time_us_t elapsed;
+
+        // implements: LLR-1553-RT-003: "more" words than commanded is a count error too.
+        // Checked on every pass, not only while the delay is running: the words may all
+        // have been on the bus before this RT was scheduled. A contiguous extra word
+        // belongs to this message; a later one belongs to the next message and is kept.
+        if (ctx->commit_pending && (!ctx->replay_valid))
+        {
+            mil1553_bus_record_t extra;
+
+            if (rt_next_word(ctx, ctx->pending_channel, &extra))
+            {
+                if (extra.timestamp_us < (mil1553_time_us_t)(ctx->pending_last_word_end_us + MIL1553_T_GAP_MIN_US))
+                {
+                    rt_fail_message(ctx, MIL1553_ERR_WORD_COUNT_MISMATCH);
+                    break;
+                }
+                rt_replay(ctx, ctx->pending_channel, &extra);
+            }
+        }
+
+        elapsed = (mil1553_time_us_t)(rt_now(ctx) - ctx->message_end_time_us);
 
         if (elapsed < (mil1553_time_us_t)ctx->response_delay_us)
         {
@@ -579,14 +816,16 @@ bool rt_run(mil1553_rt_context_t *ctx)
         }
         else if (ctx->pending_is_broadcast)
         {
-            // Implements: LLR-1553-RT-006/009: no transmission, BCR latched for the next real response
+            // implements: LLR-1553-RT-006/009: no transmission, BCR latched for the next real response
+            if (ctx->commit_pending) { rt_commit_received(ctx); }
             ctx->broadcast_received_latched = true;
-            ctx->state = MIL1553_RT_STATE_WAIT_COMMAND;
+            rt_finish_message(ctx);
         }
         else
         {
+            if (ctx->commit_pending) { rt_commit_received(ctx); }
             rt_build_and_send_status(ctx, false, ctx->pending_data_to_send);
-            ctx->state = MIL1553_RT_STATE_WAIT_COMMAND;
+            rt_finish_message(ctx);
         }
         break;
     }
@@ -595,9 +834,10 @@ bool rt_run(mil1553_rt_context_t *ctx)
     {
         if (ctx->pending_transmission_error)
         {
-            // implements: LLR-1553-RT-010: transmit nothing
+            // implements: LLR-1553-RT-010: ME set, transmit nothing
+            ctx->message_error_latched = true;
             ctx->pending_transmission_error = false;
-            ctx->state = MIL1553_RT_STATE_WAIT_COMMAND;
+            rt_finish_message(ctx);
         }
         else
         {
@@ -606,7 +846,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
             if (ctx->message_end_time_us == 0U)
             {
-                ctx->message_end_time_us = rt_now(ctx);
+                ctx->message_end_time_us = ctx->pending_last_word_end_us;
             }
             elapsed = (mil1553_time_us_t)(rt_now(ctx) - ctx->message_end_time_us);
 
@@ -617,9 +857,8 @@ bool rt_run(mil1553_rt_context_t *ctx)
             else
             {
                 ctx->message_error_latched = true;
-                rt_build_and_send_status(ctx, true, 0U);
-                ctx->message_end_time_us = 0U;
-                ctx->state = MIL1553_RT_STATE_WAIT_COMMAND;
+                if (!ctx->pending_is_broadcast) { rt_build_and_send_status(ctx, true, 0U); } // a broadcast is never answered, LLR-1553-RT-009
+                rt_finish_message(ctx);
             }
         }
         break;
@@ -632,7 +871,7 @@ bool rt_run(mil1553_rt_context_t *ctx)
 
         if (ctx->message_end_time_us == 0U)
         {
-            ctx->message_end_time_us = rt_now(ctx);
+            ctx->message_end_time_us = ctx->pending_last_word_end_us;
         }
         elapsed = (mil1553_time_us_t)(rt_now(ctx) - ctx->message_end_time_us);
 
@@ -642,9 +881,8 @@ bool rt_run(mil1553_rt_context_t *ctx)
         }
         else
         {
-            rt_build_and_send_status(ctx, true, 0U);
-            ctx->message_end_time_us = 0U;
-            ctx->state = MIL1553_RT_STATE_WAIT_COMMAND;
+            if (!ctx->pending_is_broadcast) { rt_build_and_send_status(ctx, true, 0U); } // a broadcast is never answered, LLR-1553-RT-009
+            rt_finish_message(ctx);
         }
         break;
     }
