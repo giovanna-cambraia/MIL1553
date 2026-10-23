@@ -166,7 +166,17 @@ static void bm_reconstruct_channel(mil1553_bm_context_t *ctx, mil1553_channel_t 
                     (void)mil1553_word_classify(ctx->capture.records[j].symbols, &decoded2);
                     mil1553_word_unpack_command(decoded2.field, &cmd2);
 
-                    if ((decoded2.sync == MIL1553_SYNC_COMMAND_STATUS) && (cmd2.tr_bit == MIL1553_TR_TRANSMIT))
+                    // implements: LLR-1553-BM-002. an RT-to-RT message is a receive command to one RT followed IMMEDIATELY (no gap)
+                    // by a transmit command to a different RT; a second command that follows after a gap, or after a broadcast / mode
+                    // command, is the start of its own message, not the second half of this one
+                    if ((decoded2.sync == MIL1553_SYNC_COMMAND_STATUS) &&
+                        (cmd2.tr_bit == MIL1553_TR_TRANSMIT) &&
+                        (cmd1.tr_bit == MIL1553_TR_RECEIVE) &&
+                        (msg.msg_type != MIL1553_MSG_BROADCAST) &&
+                        (msg.msg_type != MIL1553_MSG_MODE_CODE) &&
+                        (cmd2.rt_address != cmd1.rt_address) &&
+                        (ctx->capture.records[j].start_time_us <
+                         (mil1553_time_us_t)(w->start_time_us + MIL1553_WORD_TIME_US + MIL1553_T_GAP_MIN_US)))
                     {
                         msg.msg_type = MIL1553_MSG_RT_TO_RT;
                         msg.rt_address_2 = cmd2.rt_address;

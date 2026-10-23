@@ -30,11 +30,11 @@ extern "C" {
 
 // implements: LLR-1553-BM-001
 typedef struct {
-    mil1553_channel_t channel;
-    mil1553_time_us_t start_time_us;
-    mil1553_symbols_t symbols;
+    mil1553_channel_t     channel;
+    mil1553_time_us_t     start_time_us;
+    mil1553_symbols_t     symbols;
     mil1553_terminal_id_t sender;
-    mil1553_word_class_t classification;
+    mil1553_word_class_t  classification;
 } mil1553_bm_captured_word_t;
 
 typedef struct {
@@ -46,13 +46,13 @@ typedef struct {
 // implements: LLR-1553-BM-002
 typedef struct {
     mil1553_msg_type_t msg_type;
-    mil1553_channel_t channel;
-    mil1553_rt_addr_t rt_address; // primary RT, or receiving RT for RT-to-RT
-    mil1553_rt_addr_t rt_address_2; // RT-to-RT transmitting RT; unused otherwise
-    mil1553_time_us_t command_end_time_us; // end of the last BC-sent word of the message
-    bool response_seen;
-    mil1553_time_us_t response_start_time_us; // valid only if response_seen
-    uint32_t response_time_us; // response_start - command_end
+    mil1553_channel_t   channel;
+    mil1553_rt_addr_t   rt_address;    // primary RT, or receiving RT for RT-to-RT
+    mil1553_rt_addr_t   rt_address_2;  // RT-to-RT transmitting RT; unused otherwise
+    mil1553_time_us_t   command_end_time_us; // end of the last BC-sent word of the message
+    bool                 response_seen;
+    mil1553_time_us_t   response_start_time_us; // valid only if response_seen
+    uint32_t             response_time_us;       // response_start - command_end
 } mil1553_bm_message_t;
 
 typedef struct {
@@ -64,10 +64,10 @@ typedef struct {
 
 typedef struct {
     mil1553_bus_model_context_t *bus;
-    mil1553_bm_capture_buffer_t capture;
-    mil1553_bm_message_t messages[BM_MESSAGE_CAPACITY];
-    uint16_t message_count;
-    uint32_t message_overflow_count;
+    mil1553_bm_capture_buffer_t  capture;
+    mil1553_bm_message_t         messages[BM_MESSAGE_CAPACITY];
+    uint16_t                      message_count;
+    uint32_t                      message_overflow_count;
 } mil1553_bm_context_t;
 
 // implements: LLR-1553-BM-001
@@ -108,4 +108,4 @@ void bm_get_stats(const mil1553_bm_context_t *ctx, mil1553_bm_stats_t *out_stats
 }
 #endif
 
-#endif 
+#endif
