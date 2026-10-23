@@ -9,9 +9,9 @@
 # Layout assumed (relative to this file):  ../../include/c  ../../src/c  ./unity
 # Override tools if needed:  make CC=gcc PYTHON=python
 
-# On MinGW use the make that ships with it (mingw32-make) if `make` is absent
+# On MinGW use the make that ships with it (mingw32-make) if `make` is absent.
 
-CC = gcc
+CC      ?= gcc
 PYTHON  ?= python3
 ROOT    := ../..
 
@@ -24,20 +24,18 @@ endif
 CFLAGS  := -std=c11 -Wall -Wextra -Wshadow -g \
            -I$(ROOT)/include/c -I$(ROOT)/src/c -Iunity -I.
 
-# Release-configuration library: every src/c/*.c except the role entry points
-# (main_*.c) and standalone programs (hsi_smoke.c). src/c/errinject/ is
-# deliberately NOT listed: unit tests exercise the release build
-# (bus_model_tx.c, no injector). Error-injection tests have their own
+# Release-configuration library: every src/c/*.c except the role entry points.
+# src/c/errinject/ is deliberately NOT listed: unit tests exercise the release
+# build (bus_model_tx.c, no injector). Error-injection tests have their own
 # test-configuration target.
-LIB_EXCLUDE := $(ROOT)/src/c/main_%.c $(ROOT)/src/c/hsi_smoke.c
-LIB_SRC     := $(filter-out $(LIB_EXCLUDE),$(wildcard $(ROOT)/src/c/*.c))
-LIB_OBJ     := $(patsubst $(ROOT)/src/c/%.c,build/obj/%.o,$(LIB_SRC))
+LIB_SRC := $(filter-out $(ROOT)/src/c/main_%.c,$(wildcard $(ROOT)/src/c/*.c))
+LIB_OBJ := $(patsubst $(ROOT)/src/c/%.c,build/obj/%.o,$(LIB_SRC))
 
 TESTS   := $(basename $(notdir $(wildcard test_*.c)))
 RESULTS := $(addprefix build/,$(addsuffix .result,$(TESTS)))
 
-.PHONY: all clean $(TESTS)
-all: $(RESULTS)
+.PHONY: all clean inspect $(TESTS)
+all: inspect $(RESULTS)
 	@echo
 	@failed=0; for t in $(TESTS); do \
 	    printf '%-28s ' $$t; grep -E 'Tests [0-9]+ Failures' build/$$t.log; \
@@ -45,6 +43,10 @@ all: $(RESULTS)
 	if [ $$failed -ne 0 ]; then echo "UNIT TESTS FAILED"; exit 1; fi; echo "ALL UNIT TESTS PASSED"
 
 $(TESTS): %: build/%.result
+
+# Inspection checks that cannot be expressed as unit tests (LLR-1553-BM-003).
+inspect:
+	@sh check_bm_isolation.sh $(ROOT)/include/c $(ROOT)/src/c $(CC)
 
 build/obj/%.o: $(ROOT)/src/c/%.c | build/obj
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -58,7 +60,7 @@ build/%_runner.c: %.c gen_runner.py | build
 build/%$(EXE): %.c build/%_runner.c build/unity.o $(LIB_OBJ) test_support.h
 	$(CC) $(CFLAGS) $< build/$*_runner.c build/unity.o $(LIB_OBJ) -o $@
 
-# Run the suite; keep its log; never abort the whole make on one failing suite
+# Run the suite; keep its log; never abort the whole make on one failing suite.
 build/%.result: build/%$(EXE)
 	@./build/$*$(EXE) > build/$*.log; rc=$$?; grep -v ":PASS" build/$*.log; \
 	echo $$rc > $@; true
