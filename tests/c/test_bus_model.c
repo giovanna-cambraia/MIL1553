@@ -1,4 +1,5 @@
 /*
+    project: MIL1553
     verifies: LLR-1553-BUS-001, LLR-1553-BUS-003, and the in-process part of LLR-1553-BUS-002 (record fidelity)
 
     NOT covered here: the wire serialization and version/layout rejection of LLR-1553-BUS-002 (design/bus_transport_contract.md 3); that behavior is for the peer-process
@@ -38,7 +39,7 @@ void test_llr_1553_bus_001_sender_does_not_receive_its_own_word(void)
     mil1553_symbols_t s; mil1553_bus_record_t r;
     ts_data(s, 1U);
     (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, s, MIL1553_TERMINAL_BC);
-    TEST_ASSERT_FALSE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, &r)); 
+    TEST_ASSERT_FALSE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, &r));
     TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
 }
 
@@ -116,24 +117,55 @@ void test_llr_1553_bus_001_loopback_read_sees_own_word_without_disturbing_normal
     ts_data(s, 0x77U);
     (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, s, MIL1553_TERMINAL_RT1);
 
-    TEST_ASSERT_FALSE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r)); // normal read skips own 
+    TEST_ASSERT_FALSE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r)); // normal read skips own
     TEST_ASSERT_TRUE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
     TEST_ASSERT_EQUAL(MIL1553_TERMINAL_RT1, r.sender);
     TEST_ASSERT_FALSE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
-    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, &r)); // others unaffected 
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, &r)); // others unaffected
+}
+
+// LLR-1553-BIT-007 loopback scanner: IBIT's pattern must be found even when other
+// terminals have queued words between the loopback cursor and the pattern itself.
+void test_llr_1553_bus_001_loopback_finds_its_own_word_past_other_terminals_traffic(void)
+{
+    mil1553_symbols_t a, b, c; mil1553_bus_record_t r; uint16_t f;
+    ts_data(a, 0x0AU); ts_data(b, 0x0BU); ts_data(c, 0x0CU);
+    (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, a, MIL1553_TERMINAL_BC);       // others' words first ...
+    (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, b, MIL1553_TERMINAL_RT2);
+    (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, c, MIL1553_TERMINAL_RT1);      // ... then RT1's own
+
+    TEST_ASSERT_TRUE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
+    TEST_ASSERT_EQUAL(MIL1553_TERMINAL_RT1, r.sender);
+    (void)ts_decode(r.symbols, &f, (mil1553_sync_t *)0);
+    TEST_ASSERT_EQUAL_UINT16(0x0CU, f);
+    TEST_ASSERT_FALSE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
+}
+
+// The loopback cursor is dedicated: skipping other terminals' words on it must not
+// advance their normal listener_read_count cursor.
+void test_llr_1553_bus_001_loopback_skipping_others_leaves_their_normal_cursors_alone(void)
+{
+    mil1553_symbols_t a, c; mil1553_bus_record_t r;
+    ts_data(a, 1U); ts_data(c, 2U);
+    (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, a, MIL1553_TERMINAL_BC);
+    (void)bus_model_transmit(&bus, MIL1553_CHANNEL_A, c, MIL1553_TERMINAL_RT1);
+    TEST_ASSERT_TRUE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_RT1, &r));       // BC's word is still RT1's to read
+    TEST_ASSERT_EQUAL(MIL1553_TERMINAL_BC, r.sender);
+    TEST_ASSERT_TRUE(ts_rx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BM, &r));         // and the BM's
 }
 
 void test_llr_1553_bus_001_loopback_on_failed_channel_returns_nothing(void)
 {
     mil1553_symbols_t s; mil1553_bus_record_t r;
     ts_data(s, 1U);
-    (void)bus_model_set_channel_failed(&bus, MIL1553_CHANNEL_B, true);
+    (void)bus_model_transmit(&bus, MIL1553_CHANNEL_B, s, MIL1553_TERMINAL_RT1);
     bus_model_set_channel_failed(&bus, MIL1553_CHANNEL_B, true);
     TEST_ASSERT_FALSE(bus_model_receive_loopback(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_RT1, &r));
 }
 
 // LLR-1553-BUS-002 (in-process part)
-void test_lle_1553_bus_002_record_carries_timestamp_sender_and_symbols(void)
+void test_llr_1553_bus_002_record_carries_timestamp_sender_and_symbols(void)
 {
     mil1553_symbols_t s; mil1553_bus_record_t r;
     ts_cmd(s, 3U, MIL1553_TR_RECEIVE, 4U, 5U);
