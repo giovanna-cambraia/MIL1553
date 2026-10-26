@@ -136,8 +136,7 @@ static mil1553_data_t rt_mode_response_word(const mil1553_rt_context_t *ctx)
             value = (mil1553_data_t)ctx->last_command_field;
             break;
         case RT_MODE_TX_BIT:
-            // the latched BIT result: bit 0 terminal flag, bit 1 subsystem flag
-            value = (mil1553_data_t)((ctx->terminal_flag ? 1U : 0U) | (ctx->subsystem_flag ? 2U : 0U));
+            value = (mil1553_data_t)ctx->bit_word; // built from the BIT result structure (bit_result_to_word)
             break;
         default:
             value = 0U;
@@ -261,7 +260,7 @@ static void rt_build_and_send_status(mil1553_rt_context_t *ctx, bool suppress_da
     status.service_request = false; // not exercised
     status.broadcast_received = ctx->broadcast_received_latched;
     status.busy = ctx->subsystem_busy;
-    status.subsystem_flag = ctx->subsystem_flag;
+    status.subsystem_flag = ctx->subsystem_flag || ctx->bit_degraded; // LLR-1553-BIT-008: SF on a non-fatal BIT result
     status.dbc_acceptance = false; // Dynamic Bus Control not implemented, SDD 4.6
     // TF: BIT-driven, suppressed by inhibit-TF (mode 6), forced on in FAIL_SAFE (RT-013)
     status.terminal_flag = (ctx->terminal_flag && (!ctx->tf_inhibited)) || ctx->fail_safe;
@@ -350,6 +349,8 @@ bool rt_init(mil1553_rt_context_t *ctx, mil1553_rt_addr_t own_address, mil1553_t
     ctx->vector_word = 0U;
     ctx->latest_command_field = 0U;
     ctx->last_command_field = 0U;
+    ctx->bit_degraded = false;
+    ctx->bit_word = 0U;
     ctx->pending_data_expected = 0U;
     ctx->pending_data_received = 0U;
     ctx->pending_data_to_send = 0U;
@@ -389,6 +390,8 @@ void rt_reset(mil1553_rt_context_t *ctx)
     ctx->message_error_latched = false;
     ctx->broadcast_received_latched = false;
     ctx->terminal_flag = false;          // PBIT re-evaluates it
+    ctx->bit_degraded = false;
+    ctx->bit_word = 0U;
     ctx->fail_safe = false;
     ctx->reset_pending = false;
     ctx->tf_inhibited = false;
@@ -409,6 +412,29 @@ bool rt_take_self_test_request(mil1553_rt_context_t *ctx)
     bool requested = ctx->self_test_requested;
     ctx->self_test_requested = false;
     return requested;
+}
+
+// implements: LLR-1553-BIT-008, LLR-1553-RT-006, LLR-1553-RT-008
+void rt_apply_bit_state(mil1553_rt_context_t *ctx, mil1553_bit_state_t state, uint16_t bit_word)
+{
+    ctx->bit_word = bit_word;
+
+    if (state == MIL1553_BIT_STATE_FAIL)
+    {
+        rt_report_bit_result(ctx, true, true, false);
+    }
+    else if (state == MIL1553_BIT_STATE_DEGRADED)
+    {
+        ctx->bit_degraded = true;
+    }
+    else if (state == MIL1553_BIT_STATE_OPERATIONAL)
+    {
+        ctx->bit_degraded = false;
+    }
+    else
+    {
+        // POWER_UP / PBIT / CBIT_RUNNING / IBIT_RUNNING: a test is in progress, no verdict yet
+    }
 }
 
 // implements: LLR-1553-RT-008

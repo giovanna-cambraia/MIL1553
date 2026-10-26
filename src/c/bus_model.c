@@ -146,13 +146,19 @@ bool bus_model_receive(mil1553_bus_model_context_t *ctx, mil1553_channel_t chann
     return false; // exhausted bound without finding a non-self record
 }
 
-// implements: LLR-1553-BUS-001, LLR-1553-BUS-002, LLR-1553-BIT-007
+/*
+    implements: LLR-1553-BUS-001, LLR-1553-BUS-002, LLR-1553-BIT-007
+
+    returns the next word sent by terminal_id itself, skipping (and consuming, on this dedicated cursor only) words sent by anyone else - so IBIT reads back its own
+    pattern even when other terminals' traffic is already on the channel; bounded by BUS_MODEL_QUEUE_CAPACITY iterations (MISRA: bounded loop)
+*/
 bool bus_model_receive_loopback(mil1553_bus_model_context_t *ctx, mil1553_channel_t channel, mil1553_terminal_id_t terminal_id, mil1553_bus_record_t *out_record)
 {
     mil1553_bus_channel_state_t *ch = bus_model_channel_state(ctx, channel);
     uint8_t ch_idx = bus_model_channel_index(channel);
     uint8_t l_idx = (uint8_t)terminal_id;
     uint32_t read_pos;
+    uint32_t iterations;
 
     if (ch->failed)
     {
@@ -161,33 +167,40 @@ bool bus_model_receive_loopback(mil1553_bus_model_context_t *ctx, mil1553_channe
 
     read_pos = ctx->loopback_read_count[ch_idx][l_idx];
 
-    if (read_pos >= ch->total_written)
+    for (iterations = 0U; iterations < BUS_MODEL_QUEUE_CAPACITY; iterations++)
     {
-        return false;
-    }
+        const mil1553_bus_record_t *rec;
 
-    if ((ch->total_written - read_pos) > BUS_MODEL_QUEUE_CAPACITY)
-    {
-        // fell behind: snap forward (no separate drop counter kept for the loopback cursor - IBIT is expected to poll for its own just sent word promptly, so this path
-        // is a defensive bound, not a normal occurrence).
-        read_pos = ch->total_written - BUS_MODEL_QUEUE_CAPACITY;
-    }
-
-    {
-        uint32_t slot = read_pos % BUS_MODEL_QUEUE_CAPACITY;
-        const mil1553_bus_record_t *rec = &ch->records[slot];
-        uint8_t k;
-
-        ctx->loopback_read_count[ch_idx][l_idx] = read_pos + 1U;
-
-        out_record->timestamp_us = rec->timestamp_us;
-        out_record->sender = rec->sender;
-        for (k = 0U; k < 5U; k++)
+        if (read_pos >= ch->total_written)
         {
-            out_record->symbols[k] = rec->symbols[k];
+            break;
         }
-        return true;
+        if ((ch->total_written - read_pos) > BUS_MODEL_QUEUE_CAPACITY)
+        {
+            // fell behind the ring: snap forward (a defensive bound: IBIT reads its own word straight after sending it)
+            read_pos = ch->total_written - BUS_MODEL_QUEUE_CAPACITY;
+        }
+
+        rec = &ch->records[read_pos % BUS_MODEL_QUEUE_CAPACITY];
+        read_pos++;
+
+        if (rec->sender == terminal_id)
+        {
+            uint8_t k;
+
+            out_record->timestamp_us = rec->timestamp_us;
+            out_record->sender = rec->sender;
+            for (k = 0U; k < 5U; k++)
+            {
+                out_record->symbols[k] = rec->symbols[k];
+            }
+            ctx->loopback_read_count[ch_idx][l_idx] = read_pos;
+            return true;
+        }
     }
+
+    ctx->loopback_read_count[ch_idx][l_idx] = read_pos;
+    return false;
 }
 
 // implements: LLR-1553-BUS-001
