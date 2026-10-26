@@ -119,6 +119,8 @@ typedef struct {
     mil1553_data_t             vector_word;         // returned by transmit vector word (mode code 16)
     uint16_t                   latest_command_field;  // last command word accepted
     uint16_t                   last_command_field;    // the one before it (mode code 18 returns this)
+    bool                       bit_degraded;          // BIT state is DEGRADED: reported as the subsystem flag
+    uint16_t                   bit_word;              // returned by transmit-BIT-word (mode code 19)
     mil1553_time_us_t          message_end_time_us; // end of last received word
 
     mil1553_error_record_t error_log[MIL1553_ERROR_LOG_CAPACITY]; // LLR-1553-ERR-004
@@ -163,6 +165,18 @@ void rt_reset(mil1553_rt_context_t *ctx);
     depend on the BIT modules; the role's main loop polls this and runs bit_ibit_run when it returns true
 */
 bool rt_take_self_test_request(mil1553_rt_context_t *ctx);
+
+/*
+    implements: LLR-1553-BIT-008, LLR-1553-RT-006, LLR-1553-RT-008
+
+    applies the current BIT state to this RT; the owner calls it after each BIT run or CBIT cycle, passing
+    bit_result_to_word(&result) as bit_word
+      FAIL         fatal: terminal flag set and the RT goes to FAIL_SAFE
+      DEGRADED     non-fatal: reported as the subsystem flag
+      OPERATIONAL  clears the degraded indication (a FAIL_SAFE is not cleared: only a reset leaves it)
+    other states change no flag; bit_word is what transmit-BIT-word returns
+*/
+void rt_apply_bit_state(mil1553_rt_context_t *ctx, mil1553_bit_state_t state, uint16_t bit_word);
 
 // implements: LLR-1553-RT-008 - the word returned by transmit-vector-word (code 16)
 void rt_set_vector_word(mil1553_rt_context_t *ctx, mil1553_data_t value);
