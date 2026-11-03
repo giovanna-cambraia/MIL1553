@@ -6,13 +6,14 @@
 
     fault semantics (all act on words as they are transmitted, in bus_model_transmit's hook, for the terminal named by the scenario's "target" and the scenario's bus):
 
-    PARITY_BIT_FLIP         swap the parity bit cell (valid Manchester, wrong parity) for target words word_index .. +count-1, counted from scenario start 
-    CORRUPT_SYNC            replace the sync with an invalid pattern, same word window 
+    PARITY_BIT_FLIP         swap the parity bit cell (valid Manchester, wrong parity) for target words word_index .. +count-1, counted from scenario start
+    CORRUPT_SYNC            replace the sync with an invalid pattern, same word window
     SUPPRESS_RESPONSE       drop every word the target sends for duration_us of virtual time from scenario start
-    DELAY_RESPONSE          advance the virtual clock by delay_us before the target's first `count` responses (short response)
+    DELAY_RESPONSE          advance the virtual clock by delay_us before the target's first `count` status words go out
+    WRONG_WORD_COUNT        drop the data word with index word_index in the target's first `count` responses (short response)
     STATUS_BIT_INJECT       set BUSY / ME / SF / TF in the target's first `count` status words, parity recomputed
-    ILLEGAL_COMMAND         rewrite the subaddress of the first `count` BC command addressed to the target RT to ERRINJECT_ILLEGAL_SUBADDRESS, parity recomputed
-    BUS_A_FAIL / BUS_B_FAIL mark the channel failed from scenario start 
+    ILLEGAL_COMMAND         rewrite the subaddress of the first `count` BC commands addressed to the target RT to ERRINJECT_ILLEGAL_SUBADDRESS, parity recomputed
+    BUS_A_FAIL / BUS_B_FAIL mark the channel failed from scenario start
 */
 
 #ifndef MIL1553_ENABLE_ERROR_INJECTION
@@ -21,6 +22,7 @@
 
 #include "error_inject.h"
 #include "config_signature.h"
+#include "mil1553_word.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -32,10 +34,10 @@
 static bool g_armed = false;
 static bool g_loaded = false;
 
-static errinject_scenario_t g_scen[ERRINJECT_MAX_SCENAROS];
+static errinject_scenario_t g_scen[ERRINJECT_MAX_SCENARIOS];
 static uint32_t g_scen_count = 0U;
 
-static errinject_result_t g_res[ERRINJECT_MAX_SCENAROS];
+static errinject_result_t g_res[ERRINJECT_MAX_SCENARIOS];
 static uint32_t g_res_count = 0U;
 
 static mil1553_rt_addr_t g_rt_addr[BUS_MODEL_LISTENER_COUNT];
@@ -44,7 +46,7 @@ static bool g_active = false;
 static uint32_t g_active_idx = 0U;
 static mil1553_time_us_t g_active_start_us = 0U;
 static mil1553_time_us_t g_first_inject_us = 0U;
-static uint32_t g_word_seen = 0U;
+static uint32_t g_words_seen = 0U;
 static uint32_t g_applied = 0U;
 static uint32_t g_resp_data_idx = 0U;
 
@@ -53,14 +55,34 @@ static errinject_reject_reason_t g_last_reject = ERRINJECT_REJECT_NONE;
 
 static uint8_t g_yaml_buf[YAML_MAX_BYTES + 1U];
 
+// test-harness support: back to the condition at process start
+void errinject_reset(void)
+{
+    g_armed = false;
+    g_loaded = false;
+    g_active = false;
+    g_scen_count = 0U;
+    g_res_count = 0U;
+    g_active_idx = 0U;
+    g_active_start_us = 0U;
+    g_first_inject_us = 0U;
+    g_words_seen = 0U;
+    g_applied = 0U;
+    g_resp_data_idx = 0U;
+    g_reject_count = 0U;
+    g_last_reject = ERRINJECT_REJECT_NONE;
+    (void)memset(g_rt_addr, 0, sizeof(g_rt_addr));
+}
+
 static void reject(errinject_reject_reason_t reason)
 {
     g_reject_count++;
     g_last_reject = reason;
 }
 
-// name tables 
-typedef struct ( const char *name, uint32_t value; ) name_entry_t;
+// name tables
+
+typedef struct { const char *name; uint32_t value; } name_entry_t;
 
 static const name_entry_t FAULT_NAMES[] = {
     { "PARITY_BIT_FLIP",   (uint32_t)MIL1553_FAULT_PARITY_BIT_FLIP },
@@ -77,22 +99,22 @@ static const name_entry_t FAULT_NAMES[] = {
 
 static const name_entry_t TARGET_NAMES[] = {
     { "BC", (uint32_t)MIL1553_TERMINAL_BC }, { "RT1", (uint32_t)MIL1553_TERMINAL_RT1 },
-    { "RT2", (uint32_t)MIL1553_TERMINAL_RT2 }, ( "BM", (uint32_t)MIL1553_TERMINAL_BM)
+    { "RT2", (uint32_t)MIL1553_TERMINAL_RT2 }, { "BM", (uint32_t)MIL1553_TERMINAL_BM }
 };
 #define TARGET_NAME_COUNT (sizeof(TARGET_NAMES) / sizeof(TARGET_NAMES[0]))
 
 static const name_entry_t BIT_NAMES[] = {
     { "BUSY", (uint32_t)ERRINJECT_BIT_BUSY }, { "ME", (uint32_t)ERRINJECT_BIT_ME },
-    { "SF", (uint32_t)ERRINJECT_BIT_SF}, { "TF", (uint32_t)ERRINJECT_BIT_TF }
+    { "SF", (uint32_t)ERRINJECT_BIT_SF }, { "TF", (uint32_t)ERRINJECT_BIT_TF }
 };
 #define BIT_NAME_COUNT (sizeof(BIT_NAMES) / sizeof(BIT_NAMES[0]))
 
-// detection tokens: values 0..11 are mil1553_error_type_t; the two below are special 
+// detection tokens: values 0..11 are mil1553_error_type_t; the two below are special
 #define DET_CBIT_RESPONSE_TIME (100U)
-#define DET_NONE (101U)
+#define DET_NONE               (101U)
 
 static const name_entry_t DETECTION_NAMES[] = {
-     { "PARITY",                  (uint32_t)MIL1553_ERR_PARITY },
+    { "PARITY",                  (uint32_t)MIL1553_ERR_PARITY },
     { "SYNC",                    (uint32_t)MIL1553_ERR_SYNC },
     { "MANCHESTER",              (uint32_t)MIL1553_ERR_MANCHESTER },
     { "NO_RESPONSE",             (uint32_t)MIL1553_ERR_NO_RESPONSE },
@@ -161,7 +183,7 @@ bool errinject_arm(uint32_t token)
 void errinject_disarm(void)
 {
     g_armed = false;
-    g_active - false;
+    g_active = false;
 }
 
 bool errinject_is_armed(void)
@@ -204,6 +226,10 @@ static bool parse_u32(const char *s, uint32_t *out)
 
     if (*s == '\0')
     {
+        return false;
+    }
+    while (*s != '\0')
+    {
         if ((*s < '0') || (*s > '9'))
         {
             return false;
@@ -225,11 +251,11 @@ static bool copy_str(char *dst, size_t dst_size, const char *src)
     return true;
 }
 
-#define HAVE_ID (0x01U)
-#define HAVE_TARGET (0x02U)
-#define HAVE_FAULT (0x04U)
+#define HAVE_ID       (0x01U)
+#define HAVE_TARGET   (0x02U)
+#define HAVE_FAULT    (0x04U)
 #define HAVE_EXPECTED (0x08U)
-#define HAVE_ALL (HAVE_ID | HAVE_TARGET | HAVE_FAULT | HAVE_EXPECTED)
+#define HAVE_ALL      (HAVE_ID | HAVE_TARGET | HAVE_FAULT | HAVE_EXPECTED)
 
 static bool set_field(errinject_scenario_t *sc, uint32_t *have, const char *key, const char *value)
 {
@@ -251,7 +277,7 @@ static bool set_field(errinject_scenario_t *sc, uint32_t *have, const char *key,
     {
         if (strcmp(value, "A") == 0) { sc->bus_sel = ERRINJECT_BUS_A; }
         else if (strcmp(value, "B") == 0) { sc->bus_sel = ERRINJECT_BUS_B; }
-        else if (strcmp(value, "ANY") == 0) { sc->bus_sel == ERRINJECT_BUS_ANY; }
+        else if (strcmp(value, "ANY") == 0) { sc->bus_sel = ERRINJECT_BUS_ANY; }
         else { return false; }
         return true;
     }
@@ -263,8 +289,8 @@ static bool set_field(errinject_scenario_t *sc, uint32_t *have, const char *key,
         return true;
     }
     if (strcmp(key, "word_index") == 0) { return parse_u32(value, &sc->word_index); }
-    if (strcmp(key, "count") == 0) { return parse_u32(value, &sc->count); }
-    if (strcmp(key, "delay_us") == 0) { return parse_u32(value, &sc->delay_us); }
+    if (strcmp(key, "count") == 0)      { return parse_u32(value, &sc->count); }
+    if (strcmp(key, "delay_us") == 0)   { return parse_u32(value, &sc->delay_us); }
     if (strcmp(key, "duration_ms") == 0)
     {
         if (!parse_u32(value, &v)) { return false; }
@@ -281,7 +307,7 @@ static bool set_field(errinject_scenario_t *sc, uint32_t *have, const char *key,
     {
         *have |= HAVE_EXPECTED;
         if (!lookup(DETECTION_NAMES, DETECTION_NAME_COUNT, value, &v)) { return false; }
-        return copy_str(sc->expected_detection, size(sc->expected_detection), value);
+        return copy_str(sc->expected_detection, sizeof(sc->expected_detection), value);
     }
     if (strcmp(key, "expected_recovery") == 0)
     {
@@ -291,9 +317,9 @@ static bool set_field(errinject_scenario_t *sc, uint32_t *have, const char *key,
         }
         return copy_str(sc->expected_recovery, sizeof(sc->expected_recovery), value);
     }
-    if (strcmp(key, "hlr") == 0) { return copy_str(sc->hlr, sizeof(sc->hlr), value); }
-    if (strcmp(key, "llr") == 0) { return copy_str(sc->llr, sizeof(sc->llr), value); }
-    if (strcmp(key, "test_id") == 0) {return copy_str(sc->test_id, sizeof(sc->test_id), value); }
+    if (strcmp(key, "hlr") == 0)     { return copy_str(sc->hlr, sizeof(sc->hlr), value); }
+    if (strcmp(key, "llr") == 0)     { return copy_str(sc->llr, sizeof(sc->llr), value); }
+    if (strcmp(key, "test_id") == 0) { return copy_str(sc->test_id, sizeof(sc->test_id), value); }
 
     return false; // unknown key
 }
@@ -340,15 +366,16 @@ static bool parse_scenarios(char *text)
         if ((p[0] == '-') && ((p[1] == ' ') || (p[1] == '\t')))
         {
             if ((cur != (errinject_scenario_t *)0) && (have != HAVE_ALL)) { ok = false; break; }
-            if (g_scen_count >= ERRINJECT_MAX_SCENAROS) { ok = false; break; }
+            if (g_scen_count >= ERRINJECT_MAX_SCENARIOS) { ok = false; break; }
             cur = &g_scen[g_scen_count];
             g_scen_count++;
             init_scenario(cur);
             have = 0U;
-            p = trimp(p + 1);
+            p = trim(p + 1);
         }
 
         if (cur == (errinject_scenario_t *)0) { ok = false; break; }
+
         {
             char *colon = strchr(p, ':');
             char *key;
@@ -483,13 +510,15 @@ void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel
     }
 
     sc = &g_scen[g_active_idx];
-    ch_ok = (sc->bus_sel == ERRINJECT_BUS_ANY) || ((sc->bus_sel == ERRINJECT_BUS_A) && (channel == MIL1553_CHANNEL_A)) || 
+    ch_ok = (sc->bus_sel == ERRINJECT_BUS_ANY) ||
+            ((sc->bus_sel == ERRINJECT_BUS_A) && (channel == MIL1553_CHANNEL_A)) ||
             ((sc->bus_sel == ERRINJECT_BUS_B) && (channel == MIL1553_CHANNEL_B));
     cls = mil1553_word_classify(symbols, &dec);
 
     if (sc->fault == MIL1553_FAULT_ILLEGAL_COMMAND)
     {
-        if ((sender == MIL1553_TERMINAL_BC) && ch_ok && (g_applied < sc->count) && (cls == MIL1553_WORD_VALID) && (dec.sync == MIL1553_SYNC_COMMAND_STATUS))
+        if ((sender == MIL1553_TERMINAL_BC) && ch_ok && (g_applied < sc->count) &&
+            (cls == MIL1553_WORD_VALID) && (dec.sync == MIL1553_SYNC_COMMAND_STATUS))
         {
             mil1553_command_fields_t cmd;
             mil1553_word_unpack_command(dec.field, &cmd);
@@ -517,7 +546,7 @@ void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel
     switch (sc->fault)
     {
         case MIL1553_FAULT_PARITY_BIT_FLIP:
-            if ((g_word_seen >= sc->word_index) && (g_word_seen < (sc->word_index + sc->count)))
+            if ((g_words_seen >= sc->word_index) && (g_words_seen < (sc->word_index + sc->count)))
             {
                 sym_flip(symbols, 38U); // parity bit cell = symbols 38,39
                 sym_flip(symbols, 39U);
@@ -526,16 +555,16 @@ void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel
             break;
 
         case MIL1553_FAULT_CORRUPT_SYNC:
-            if ((g_word_seen >= sc->word_index) && (g_word_seen < (sc->word_index + sc->count)))
+            if ((g_words_seen >= sc->word_index) && (g_words_seen < (sc->word_index + sc->count)))
             {
                 uint8_t i;
                 for (i = 0U; i < 6U; i++)
                 {
-                    sym_set(symbols, i, (uint8_t)((i % 2U) == 0U ? 1U : 0U)); // 1,0,1,0,1,0: neither valid sync 
+                    sym_set(symbols, i, (uint8_t)((i % 2U) == 0U ? 1U : 0U)); // 1,0,1,0,1,0: neither valid sync
                 }
                 mark_applied(bus);
             }
-            break;;
+            break;
 
         case MIL1553_FAULT_SUPPRESS_RESPONSE:
             if ((bus_model_now_us(bus) - g_active_start_us) < (mil1553_time_us_t)sc->duration_us)
@@ -545,7 +574,7 @@ void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel
             }
             break;
 
-       case MIL1553_FAULT_DELAY_RESPONSE:
+        case MIL1553_FAULT_DELAY_RESPONSE:
             if ((g_applied < sc->count) && (cls == MIL1553_WORD_VALID) && (dec.sync == MIL1553_SYNC_COMMAND_STATUS))
             {
                 bus_model_advance_us(bus, (mil1553_time_us_t)sc->delay_us);
@@ -569,12 +598,12 @@ void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel
             }
             else
             {
-                // not a well-formed status or data word: leave untouched 
+                // not a well-formed status or data word: leave untouched
             }
             break;
-        
+
         case MIL1553_FAULT_STATUS_BIT_INJECT:
-            if ((g_applied < sc->count) && (cls = MIL1553_WORD_VALID) && (dec.sync == MIL1553_SYNC_COMMAND_STATUS))
+            if ((g_applied < sc->count) && (cls == MIL1553_WORD_VALID) && (dec.sync == MIL1553_SYNC_COMMAND_STATUS))
             {
                 mil1553_status_fields_t st;
                 mil1553_word_unpack_status(dec.field, &st);
@@ -582,23 +611,23 @@ void errinject_filter_transmit(mil1553_bus_model_context_t *bus, mil1553_channel
                 switch (sc->status_bit)
                 {
                     case ERRINJECT_BIT_BUSY: st.busy = true; break;
-                    case ERRINJECT_BIT_ME: st.message_error = true; break;
-                    case ERRINJECT_BIT_SF: st.subsystem_flag = true; break;
-                    default: st.terminal_flag = true; break;
+                    case ERRINJECT_BIT_ME:   st.message_error = true; break;
+                    case ERRINJECT_BIT_SF:   st.subsystem_flag = true; break;
+                    default:                 st.terminal_flag = true; break;
                 }
                 (void)mil1553_word_pack_status(&st, symbols);
                 mark_applied(bus);
             }
             break;
 
-            default:
-                break;
+        default:
+            break;
     }
 
-    g_word_seen++;
+    g_words_seen++;
 }
 
-// scenario exectution and result records, LLR-1553-ERR-009
+// scenario execution and result records, LLR-1553-ERR-009
 
 // implements: LLR-1553-ERR-008, LLR-1553-ERR-009
 bool errinject_begin_scenario(uint32_t index, mil1553_bus_model_context_t *bus)
@@ -620,7 +649,7 @@ bool errinject_begin_scenario(uint32_t index, mil1553_bus_model_context_t *bus)
     g_active_idx = index;
     g_active_start_us = bus_model_now_us(bus);
     g_first_inject_us = g_active_start_us;
-    g_word_seen = 0U;
+    g_words_seen = 0U;
     g_applied = 0U;
     g_resp_data_idx = 0U;
 
@@ -664,7 +693,7 @@ void errinject_observation_add_log(errinject_observation_t *obs, const mil1553_e
 static bool detection_present(const errinject_observation_t *obs, uint32_t token)
 {
     if (token == DET_CBIT_RESPONSE_TIME) { return obs->cbit_response_time_violations > 0U; }
-    if (token == ERRINJECT_ERR_TYPE_COUNT) { return obs->error_type_count[token] > 0U; }
+    if (token < ERRINJECT_ERR_TYPE_COUNT) { return obs->error_type_count[token] > 0U; }
     return false;
 }
 
@@ -690,7 +719,7 @@ bool errinject_end_scenario(mil1553_bus_model_context_t *bus, const errinject_ob
     bool applied_ok;
     size_t i;
 
-    if ((!g_active) || (g_res_count >= ERRINJECT_MAX_SCENAROS))
+    if ((!g_active) || (g_res_count >= ERRINJECT_MAX_SCENARIOS))
     {
         return false;
     }
@@ -715,7 +744,7 @@ bool errinject_end_scenario(mil1553_bus_model_context_t *bus, const errinject_ob
     (void)strcpy(r->test_id, sc->test_id);
 
     // observed detections
-     for (i = 0U; i < DETECTION_NAME_COUNT; i++)
+    for (i = 0U; i < DETECTION_NAME_COUNT; i++)
     {
         if ((DETECTION_NAMES[i].value != DET_NONE) && detection_present(obs, DETECTION_NAMES[i].value))
         {
@@ -760,7 +789,7 @@ const errinject_result_t *errinject_get_result(uint32_t index)
     return (index < g_res_count) ? &g_res[index] : (const errinject_result_t *)0;
 }
 
-// implements: LLR-1553-ERR-009 (machine-readable output) 
+// implements: LLR-1553-ERR-009 (machine-readable output)
 bool errinject_write_results_json(const char *path)
 {
     FILE *fp = fopen(path, "wb");
@@ -788,4 +817,3 @@ bool errinject_write_results_json(const char *path)
     (void)fclose(fp);
     return true;
 }
-
