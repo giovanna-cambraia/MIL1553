@@ -170,6 +170,17 @@ bool bc_run_frame(mil1553_bc_context_t *ctx);
 // implements: LLR-1553-BC-010
 mil1553_bc_state_t bc_get_state(const mil1553_bc_context_t *ctx);
 
+/*
+    implements: LLR-1553-ERR-004
+
+    read-only view of the error log for the health monitor: records are returned const, in the order they were raised (oldest
+    first); the log holds MIL1553_ERROR_LOG_CAPACITY records; once full, new records are discarded (the earliest errors are the
+    ones kept) and counted in the overflow count
+*/
+uint8_t bc_error_log_count(const mil1553_bc_context_t *ctx);
+const mil1553_error_record_t *bc_error_log_get(const mil1553_bc_context_t *ctx, uint8_t index);
+uint32_t bc_error_log_overflow_count(const mil1553_bc_context_t *ctx);
+
 // implements: LLR-1553-REDUN-002, LLR-1553-REDUN-003
 void bc_get_health(const mil1553_bc_context_t *ctx, mil1553_bc_health_t *out_health);
 
