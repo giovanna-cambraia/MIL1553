@@ -202,6 +202,11 @@ void rt_report_bit_result(mil1553_rt_context_t *ctx, bool fatal, bool set_termin
 */
 bool rt_run(mil1553_rt_context_t *ctx);
 
+// implements: LLR-1553-ERR-004; read-only error log view, as bc_error_log_* (see bc_scheduler.h)
+uint8_t rt_error_log_count(const mil1553_rt_context_t *ctx);
+const mil1553_error_record_t *rt_error_log_get(const mil1553_rt_context_t *ctx, uint8_t index);
+uint32_t rt_error_log_overflow_count(const mil1553_rt_context_t *ctx);
+
 // implements: LLR-1553-RT-013
 mil1553_rt_state_t rt_get_state(const mil1553_rt_context_t *ctx);
 
