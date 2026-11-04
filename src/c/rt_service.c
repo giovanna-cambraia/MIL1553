@@ -101,6 +101,10 @@ static void rt_log_error(mil1553_rt_context_t *ctx, mil1553_channel_t channel, m
 static void rt_fail_message(mil1553_rt_context_t *ctx, mil1553_error_type_t error_type)
 {
     rt_log_error(ctx, ctx->pending_channel, error_type, 0U);
+    if ((error_type == MIL1553_ERR_WORD_COUNT_MISMATCH) && (ctx->cbit != (mil1553_bit_cbit_context_t *)0))
+    {
+        bit_cbit_record_word_count_violation(ctx->cbit); // LLR-1553-BIT-005
+    }
     ctx->message_error_latched = true;
     ctx->pending_transmission_error = true;
     ctx->commit_pending = false;
@@ -919,6 +923,24 @@ bool rt_run(mil1553_rt_context_t *ctx)
     }
 
     return true;
+}
+
+// implements: LLR-1553-ERR-004
+uint8_t rt_error_log_count(const mil1553_rt_context_t *ctx)
+{
+    return ctx->error_log_count;
+}
+
+// implements: LLR-1553-ERR-004
+const mil1553_error_record_t *rt_error_log_get(const mil1553_rt_context_t *ctx, uint8_t index)
+{
+    return (index < ctx->error_log_count) ? &ctx->error_log[index] : (const mil1553_error_record_t *)0;
+}
+
+// implements: LLR-1553-ERR-004
+uint32_t rt_error_log_overflow_count(const mil1553_rt_context_t *ctx)
+{
+    return ctx->error_log_overflow_count;
 }
 
 mil1553_rt_state_t rt_get_state(const mil1553_rt_context_t *ctx)
