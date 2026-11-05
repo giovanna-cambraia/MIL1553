@@ -1125,3 +1125,46 @@ void test_llr_1553_rt_013_rt_reset_works_from_every_state(void)
     TEST_ASSERT_EQUAL(MIL1553_RT_STATE_RESET, rt_get_state(&rt));
     TEST_ASSERT_FALSE(rt.fail_safe);
 }
+
+// LLR-1553-ERR-001 / ERR-004 (RT side)
+void test_llr_1553_err_001_a_corrupt_command_is_rejected_logged_by_type_and_channel_and_counted_by_cbit(void)
+{
+    mil1553_symbols_t bad; sw_t w[4];
+    mil1553_bit_cbit_context_t cb;
+    bit_cbit_init(&cb, 0U);
+    rt_attach_cbit(&rt, &cb);
+
+    ts_cmd(bad, ME_ADDR, MIL1553_TR_RECEIVE, 1U, 1U);
+    bad[4] = (uint8_t)(bad[4] ^ 0x03U);
+    (void)ts_tx(&bus, MIL1553_CHANNEL_B, MIL1553_TERMINAL_BC, bad);
+    send_data(MIL1553_CHANNEL_B, 0x55U);
+    pump(60U);
+
+    TEST_ASSERT_EQUAL_UINT(0U, replies(MIL1553_CHANNEL_B, w, 4U));            // message rejected: no answer
+    TEST_ASSERT_EQUAL_UINT8(0U, rt.subaddr_buffer[1].word_count);             // ... and nothing stored
+    TEST_ASSERT_EQUAL_UINT8(1U, rt_error_log_count(&rt));
+    TEST_ASSERT_EQUAL(MIL1553_ERR_PARITY, rt_error_log_get(&rt, 0U)->error_type);
+    TEST_ASSERT_EQUAL(MIL1553_CHANNEL_B, rt_error_log_get(&rt, 0U)->channel);
+    TEST_ASSERT_EQUAL_UINT32(1U, cb.channel[1].class_count[MIL1553_WORD_PARITY_ERROR]);   // per type, per channel
+    TEST_ASSERT_EQUAL_UINT32(0U, cb.channel[0].class_count[MIL1553_WORD_PARITY_ERROR]);
+}
+
+void test_llr_1553_err_004_the_rt_log_view_is_read_only_bounded_and_keeps_the_earliest(void)
+{
+    mil1553_symbols_t bad; unsigned i;
+    mil1553_error_record_t first;
+
+    ts_cmd(bad, ME_ADDR, MIL1553_TR_RECEIVE, 1U, 1U);
+    bad[4] = (uint8_t)(bad[4] ^ 0x03U);
+    for (i = 0U; i < (MIL1553_ERROR_LOG_CAPACITY + 4U); i++)
+    {
+        (void)ts_tx(&bus, MIL1553_CHANNEL_A, MIL1553_TERMINAL_BC, bad);
+        pump(30U);
+        if (i == 0U) { first = *rt_error_log_get(&rt, 0U); }
+    }
+    TEST_ASSERT_EQUAL_UINT8(MIL1553_ERROR_LOG_CAPACITY, rt_error_log_count(&rt));
+    TEST_ASSERT_EQUAL_UINT32(4U, rt_error_log_overflow_count(&rt));
+    TEST_ASSERT_EQUAL_UINT64(first.timestamp_us, rt_error_log_get(&rt, 0U)->timestamp_us);   // earliest kept
+    TEST_ASSERT_EQUAL(MIL1553_TERMINAL_RT1, rt_error_log_get(&rt, 0U)->terminal);
+    TEST_ASSERT_NULL(rt_error_log_get(&rt, MIL1553_ERROR_LOG_CAPACITY));
+}
