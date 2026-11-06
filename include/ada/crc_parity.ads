@@ -53,7 +53,6 @@ is
 
    --  Implements: LLR-1553-WORD-005
    --  true exactly when the total number of one-bits in (Field, Received) is odd, i.e. when Received is the parity bit Compute_Parity would give
-   ---------------------------------------------------------------------------
    function Check_Parity (Field : Data_Word; Received : Parity_Bit) return Boolean
    with Global  => null,
         Depends => (Check_Parity'Result => (Field, Received)),
