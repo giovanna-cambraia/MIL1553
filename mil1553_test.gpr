@@ -1,0 +1,43 @@
+--  project:  MIL1553
+--  purpose:  GNAT project for the Ada/SPARK implementation, TEST profile: the certified-scope sources PLUS the error injector and the AUnit tests
+
+--  realizes: LLR-1553-ERR-005 (the injector exists only in this profile), SCMP 2.4 (build profile separation)
+
+--  how the injector gets into the bus (SDD 4.5)
+--  Bus_Model.Transmit is a separate subunit, the release project uses src/ada/bus_model-transmit.adb (forwards straight to Bus_Model.Raw); this project replaces it, 
+--  through the Naming package and Excluded_Source_Files, with src/ada/errinject/bus_model_transmit_hooked.adb, which runs every word through the injector's filter first
+
+--  NOT YET USABLE: tests/ada/test_runner.adb (the AUnit main) and the Error_Inject packages are not written yet; until they are, only mil1553_release.gpr builds
+
+--  Requires AUnit (ships with GNAT; the project name is "aunit")
+--  Usage (from the project root):
+--      gprbuild -P mil1553_test.gpr
+--      build/ada/test/test_runner
+--  this project is not proved: the injector is outside the certified scope (PSAC 8); prove only mil1553_release.gpr.
+
+with "aunit";
+
+project Mil1553_Test is
+
+   for Languages    use ("Ada");
+   for Source_Dirs  use ("include/ada", "src/ada", "src/ada/errinject", "tests/ada");
+   for Object_Dir   use "build/ada/test";
+   for Exec_Dir     use "build/ada/test";
+   for Create_Missing_Dirs use "True";
+   for Main         use ("test_runner.adb");
+
+   --  the release body of the transmit subunit is replaced by the hooked one
+   for Excluded_Source_Files use ("bus_model-transmit.adb");
+
+   package Naming is
+      for Body ("Bus_Model.Transmit") use "bus_model_transmit_hooked.adb";
+   end Naming;
+
+   package Compiler is
+      --  same switches as the release profile, so the certified-scope code is compiled identically in both
+      for Default_Switches ("Ada") use
+        ("-gnat2012", "-gnatwa", "-gnatwe", "-gnatVa", "-gnato", "-gnata",
+         "-g", "-O0", "-fpreserve-control-flow", "-fstack-check");
+   end Compiler;
+
+end Mil1553_Test;

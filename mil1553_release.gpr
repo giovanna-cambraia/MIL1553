@@ -1,0 +1,52 @@
+--  project:  MIL1553
+--  purpose:  GNAT project for the Ada/SPARK implementation, RELEASE profile
+
+--  realizes: LLR-1553-ERR-005 (the error injector is not part of the certified build), SCMP 2.4 (build profile separation)
+--
+--  the source set is exactly:
+--      include/ada   the specs (.ads)
+--      src/ada       the bodies (.adb)
+--  and deliberately NOT src/ada/errinject: Source_Dirs is not recursive, so the injector child packages are not in this project at all; only mil1553_test.gpr adds them
+--
+--  usage (from the project root):
+--      gprbuild -P mil1553_release.gpr                  compile everything
+--      gnatprove -P mil1553_release.gpr --mode=check    legality + SPARK subset
+--      gnatprove -P mil1553_release.gpr --mode=flow     data and information flow
+--      gnatprove -P mil1553_release.gpr --mode=all      flow + proof (AoRTE, contracts)
+--  run the three prove commands in that order: each one is faster than the next and its errors are easier to read
+
+project Mil1553_Release is
+
+   for Languages    use ("Ada");
+   for Source_Dirs  use ("include/ada", "src/ada");
+   for Object_Dir   use "build/ada/release";
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      --  -gnat2012  Ada 2012 (SDP 3.3)
+      --  -gnatwa    all warnings; treated as errors below for the certified scope
+      --  -gnatVa    full validity checking
+      --  -gnato     overflow checks on (also required for the AoRTE argument)
+      --  -gnata     assertions and contracts are compiled in (they are checked at run
+      --             time in tests; the proof does not rely on this)
+      --  -O0        no optimisation: keeps object code traceable to source for the
+      --             structural coverage argument (SVP 7); the effect of optimisation
+      --             is a documented tool consideration, not assumed away
+      --  -fpreserve-control-flow  GNATcoverage needs it to map branches back to source
+      --  -fstack-check  stack overflow checking, part of the run-time error argument
+      for Default_Switches ("Ada") use
+        ("-gnat2012", "-gnatwa", "-gnatwe", "-gnatVa", "-gnato", "-gnata",
+         "-g", "-O0", "-fpreserve-control-flow", "-fstack-check");
+   end Compiler;
+
+   package Prove is
+      --  Level 2 is the starting point; raise it (3, 4) for a stubborn check before adding an assertion; cvc5 and z3 handle the bit-vector facts in the word layer
+      for Proof_Switches ("Ada") use
+        ("--level=2",
+         "--prover=cvc5,z3,altergo",
+         "--timeout=30",
+         "--report=all",
+         "--warnings=continue");
+   end Prove;
+
+end Mil1553_Release;
