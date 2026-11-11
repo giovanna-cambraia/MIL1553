@@ -9,7 +9,7 @@
 --    * data sync:            0 0 0 1 1 1
 --    * each of the 17 field+parity bits, field MSB first and parity last, is a pair of symbols: a one is 1 0, a zero is 0 1
 --    * 6 + 17 * 2 = 40 symbols, packed 8 per byte with symbol 0 in the most significant bit of byte 0 (design/bus_transport_contract.md 4) - the same packing as the
---    C implementation.
+--    C implementation
 
 --  the contracts below state exactly that layout, through GHOST functions that exist only for proof
 
