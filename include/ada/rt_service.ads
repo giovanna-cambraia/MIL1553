@@ -26,6 +26,8 @@ with Bit_Cbit;
 package Rt_Service
   with SPARK_Mode => On
 is
+   use type Bus_Model_Types.Counter;
+   use type Bit_Cbit.Cbit_Context;
 
    subtype Response_Delay is Natural range T_Resp_Min_Us .. T_Resp_Max_Us;
 

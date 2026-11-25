@@ -24,6 +24,10 @@ with Bit_Types;
 package Bit_Cbit
   with SPARK_Mode => On
 is
+   use type Bit_Types.Failure_Mask;
+   use type Bit_Types.Test_Id;
+   use type Bit_Types.Event_Count;
+   use type Bit_Types.Level_Result;
 
    Window_Size      : constant := 32;   --  recent word outcomes kept, per channel
    Min_Samples      : constant := 8;    --  words needed before a channel is judged
