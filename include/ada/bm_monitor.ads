@@ -24,6 +24,10 @@ package Bm_Monitor
   with SPARK_Mode => On
 is
 
+   use type Bus_Model_Types.Channel_States;
+   use type Bus_Model_Types.Cursors;
+   use type Bus_Model_Types.Counter;
+
    Capture_Capacity : constant := 256;
    Message_Capacity : constant := 128;
 
